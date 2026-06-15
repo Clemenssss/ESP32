@@ -1,0 +1,108 @@
+{
+  "version": 1,
+  "syncId": "f2141a88-5f1b-45ee-9647-0c52bd4a69a1",
+  "root": "c:\\Users\\Clemens Li\\git\\ESP32",
+  "generatedAt": 1780511804366,
+  "files": {
+    "boot.py": {
+      "size": 2280,
+      "mtime": 1780494212999
+    },
+    "boot_tmp.py": {
+      "size": 3439,
+      "mtime": 1780494225078
+    },
+    "calibrate.py": {
+      "size": 83,
+      "mtime": 1780494236458
+    },
+    "colorline.py": {
+      "size": 1681,
+      "mtime": 1780494248248
+    },
+    "credentials.py": {
+      "size": 1241,
+      "mtime": 1780494259848
+    },
+    "credentials.txt": {
+      "size": 98,
+      "mtime": 1780494271269
+    },
+    "dummy_display.py": {
+      "size": 140,
+      "mtime": 1780494282638
+    },
+    "EspressoDolce18x24.c": {
+      "size": 34817,
+      "mtime": 1780494189637
+    },
+    "ftptrans.py": {
+      "size": 8541,
+      "mtime": 1780511478251
+    },
+    "hilbert.py": {
+      "size": 3111,
+      "mtime": 1780494307759
+    },
+    "ili9341.py": {
+      "size": 39937,
+      "mtime": 1780494327138
+    },
+    "koch.py": {
+      "size": 4865,
+      "mtime": 1780494339648
+    },
+    "led.py": {
+      "size": 1653,
+      "mtime": 1780494351349
+    },
+    "main.py": {
+      "size": 9184,
+      "mtime": 1780494364809
+    },
+    "memory.py": {
+      "size": 1782,
+      "mtime": 1780494376638
+    },
+    "messwerte.csv": {
+      "size": 836,
+      "mtime": 1780494388139
+    },
+    "MicroSD.py": {
+      "size": 940,
+      "mtime": 1780494201168
+    },
+    "mountsd.py": {
+      "size": 1200,
+      "mtime": 1780494399760
+    },
+    "mpremote": {
+      "size": 0,
+      "mtime": 1780499346642
+    },
+    "sct.py": {
+      "size": 2691,
+      "mtime": 1780494411729
+    },
+    "sct_cal.json": {
+      "size": 39,
+      "mtime": 1780494423140
+    },
+    "sdcard.py": {
+      "size": 9481,
+      "mtime": 1780494436460
+    },
+    "spirale.py": {
+      "size": 1885,
+      "mtime": 1780494448269
+    },
+    "uQR.py": {
+      "size": 33253,
+      "mtime": 1780494466069
+    },
+    "xglcd_font.py": {
+      "size": 6833,
+      "mtime": 1780494478759
+    }
+  }
+}
