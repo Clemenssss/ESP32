@@ -4,7 +4,7 @@ import utime
 import json
 
 i2c = I2C(0, sda=Pin(27), scl=Pin(22), freq=400000)
-ADS_ADDR   = 0x4B
+ADS_ADDR   = 0x48
 REG_CONV   = 0x00
 REG_CONFIG = 0x01
 
@@ -13,10 +13,31 @@ AMPERE_PER_VOLT = 50.0
 
 _MUX_DIFF = {0: 0x1000, 1: 0x2000, 2: 0x3000}
 _dc_offsets = [0.0, 0.0, 0.0]
+def init_ADS1115():
+    """ 
+    Zwingt den I2C-Bus und den ADS1115-Chip in einen definierten Zustand.
+    Löst Blockaden nach unvollständigen Programmabbrüchen (Thonny Stop).
+    """
+    print("[SCT] Initialisiere und resette Hardware...")
+    try:
+        # 1. Bus-Cleanup: Sende eine leere Nachricht, um hängende Slaves freizugeben
+        i2c.writeto(ADS_ADDR, b'')
+        utime.sleep_ms(10)
+    except OSError:
+        pass
 
+    try:
+        # 2. General Call Reset an den I2C-Bus senden (Adresse 0x00, Daten 0x06)
+        # Das startet die internen Register des ADS1115 komplett neu.
+        i2c.writeto(0x00, b'\x06')
+        utime.sleep_ms(50) # Dem Chip Zeit zum Booten geben
+        print("[SCT] ADS1115 Hardware-Reset erfolgreich.")
+    except OSError as e:
+        print("[SCT] Hinweis beim Reset (General Call eventuell nicht quittiert):", e)
 def save_calibration():
     with open('sct_cal.json', 'w') as f:
         json.dump(_dc_offsets, f)
+        return str(_dc_offsets)
 
 def load_calibration():
     global _dc_offsets
@@ -70,8 +91,9 @@ def calibrate(samples=800):
         
         # Durchschnitt direkt berechnen, ohne jemals eine Liste erstellt zu haben
         _dc_offsets[ch] = summe_spannung / samples
+    print("Hardware-Spannungsoffsets gelernt:", str(_dc_offsets))    
     return "Hardware-Spannungsoffsets gelernt: "+ str(_dc_offsets)   
-    print("Hardware-Spannungsoffsets gelernt:", str(_dc_offsets))
+    
 
 # --- 100% Speicherschonende RMS-Berechnung ---
 def read_rms_calibrated(channel, samples=800):

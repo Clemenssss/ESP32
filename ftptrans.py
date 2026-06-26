@@ -1,4 +1,4 @@
-# ftp_monitor.py — Misst Werte, speichert sie und lädt sie per FTP hoch
+# ftp_monior.py — Misst Werte, speichert sie und lädt sie per FTP hoch
 import os
 import time
 import random
@@ -17,7 +17,10 @@ from logger import log
 FTP_HOST       = "fritz.box"
 FTP_DIR        = "/ESP32"
 LOCAL_FILE     = "messwerte.csv"
+LOCAL_LOGFILE  = "system_log.txt"
+FILES          = [LOCAL_FILE,LOCAL_LOGFILE]
 FREE_MIN_BYTES = 100 * 1024  # 100 KB
+RED            = color565(255, 0, 0)
 BLACK          = color565(0, 0, 0)
 GREEN          = color565(0, 255, 0)
 YELLOW         = color565(255, 255, 0)
@@ -76,25 +79,189 @@ def get_timestamp(offset_hours=2):
     )
 
 def append_row(i):
+    global last_time_in_seconds, total_kwh
+    
     ts = get_timestamp()
     date_str = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
     time_str = f"{ts[8:10]}:{ts[10:12]}:{ts[12:14]}"
     
+    # 1. Uhrzeit in absolute Tagessekunden umrechnen
+    h = int(ts[8:10])
+    m = int(ts[10:12])
+    s = int(ts[12:14])
+    current_seconds = h * 3600 + m * 60 + s
+    
+    # 2. JSON-Check: Falls Variablen im RAM "None/0" sind, versuchen wir aus der Datei zu laden
+    # ("globals()" prüft sauber, ob die Variablen im Skript überhaupt schon existieren)
+    if 'last_time_in_seconds' not in globals() or last_time_in_seconds is None:
+        try:
+            import json
+            with open('energy_state.json', 'r') as f:
+                daten = json.load(f)
+                last_time_in_seconds = daten.get("last_sec", current_seconds)
+                total_kwh = daten.get("kwh", 0.0)
+            print(f"[Energy] Stand geladen: {total_kwh:.4f} kWh")
+        except OSError:
+            # Datei existiert noch nicht -> Initialisierung mit aktuellen Werten
+            last_time_in_seconds = current_seconds
+            total_kwh = 0.0
+            print("[Energy] Keine State-Datei gefunden. Initialisiere neu.")
+
     v1, v2, v3 = sct_values_get()
-    note = f"{i} {date_str} {time_str}"
+    
+    # 3. kWh-Berechnung (Ergibt beim allerersten Aufruf korrekte 0,0 Leistung, da delta_t = 0)
+    delta_t = (current_seconds - last_time_in_seconds) % 86400
+    if delta_t > 0:
+        power_w = (v1 + v2 + v3) * 240.0
+        total_kwh += (power_w * delta_t) / 3600000.0
+        
+    # Aktuelle Zeit für den nächsten Durchlauf im RAM merken
+    last_time_in_seconds = current_seconds
+    
+    # 4. Aktuellen Zustand im JSON abspeichern (Sicherung für den nächsten Reboot)
+    try:
+        import json
+        with open('energy_state.json', 'w') as f:
+            json.dump({"last_sec": last_time_in_seconds, "kwh": total_kwh}, f)
+    except OSError as e:
+        print("[Energy] Fehler beim Sichern des Zustands:", e)
+
+    # Rest deiner originalen Funktion
+    note = f"{i} {date_str} {time_str} ({total_kwh:.3f}kWh)"
     show_values(v1, v2, v3, note)
     
-    line = f"{date_str};{time_str};{v1:.3f};{v2:.3f};{v3:.3f}\n"
+    line = f"{date_str};{time_str};{v1:.3f};{v2:.3f};{v3:.3f};{total_kwh:.4f}\n"
     with open(LOCAL_FILE, "a") as f:
         f.write(line.replace(".", ","))
+# In append_row() nach der Messung:
+    with open('last_values.json', 'w') as f:
+        json.dump({'p1': round(v1*240,1), 'p2': round(v2*240,1), 
+                   'p3': round(v3*240,1), 'kwh': total_kwh}, f)        
     return line.strip()
-
-def file_size():
+def file_size(file=LOCAL_FILE):
     try:
-        return os.stat(LOCAL_FILE)[6]
+        return os.stat(file)[6]
     except:
         return 0
+def start_webserver():
+    import socket
+    srv = socket.socket()
+    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    srv.bind(('0.0.0.0', 80))
+    srv.listen(3)
+    srv.setblocking(False)
+    return srv
 
+def handle_web(srv):
+    try:
+        conn, addr = srv.accept()
+        conn.settimeout(4)          # ← neu
+        req = conn.recv(1024).decode('utf-8', 'ignore')
+        pfad = req.split(' ')[1] if ' ' in req else '/'
+        print('[WEB] handle_web Request:', pfad)  # ← neu
+        if pfad == '/data':
+            import json
+            try:
+                with open('last_values.json') as f:
+                    body = f.read()
+            except OSError:
+                body = '{"p1":0,"p2":0,"p3":0,"kwh":0}'
+            conn.sendall(b'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n')
+            conn.sendall(body.encode())
+
+        elif pfad == '/dashboard':
+            print('[WEB] elif pfad ==  /dashboard Request: /dashboard')
+            
+            html = html_dashboard()
+            resp = html.encode('utf-8')
+            length = len(resp)
+            
+            print(' Connection: close sagt dem Browser: "Danach ist Feierabend!"')
+            header = f"HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {length}\r\nConnection: close\r\n\r\n"
+            
+            try:
+                print('# 1. Header senden')
+                conn.sendall(header.encode('utf-8'))
+                print('# 2. HTML senden')
+                conn.sendall(resp)
+                print('[WEB] Dashboard erfolgreich gesendet!')
+            except Exception as e:
+                # Falls Chrome mittendrin abbricht, fangen wir das ab, ohne dass der ESP32 abstürzt
+                print('[WEB] Senden abgebrochen durch Browser/Timeout:', e)
+            conn.close()
+    except OSError:
+        pass  # kein Request da    
+
+def html_dashboard():
+    import network
+    ip = network.WLAN(network.STA_IF).ifconfig()[0]
+    return (
+        "<!DOCTYPE html><html>"
+        "<head>"
+        "<link rel='icon' href='data:;base64,iVBORw0Kgo='>"
+        "<meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Strommonitor</title>"
+        "<style>"
+        "body{background:#1a1a2e;color:#eee;font-family:sans-serif;text-align:center;padding:20px;margin:0}"
+        "h1{color:#e94560;margin-bottom:0.5rem}"
+        ".kwh{font-size:3.5rem;font-weight:bold;color:#2ecc71;line-height:1.1}"
+        ".kwh-unit{font-size:1.2rem;color:#aaa;margin-left:4px}"
+        ".kwh-label{font-size:0.8rem;color:#aaa;letter-spacing:0.1em;margin-bottom:0.25rem}"
+        ".total{background:#16213e;border-radius:8px;padding:8px;margin:10px auto;width:90%;font-size:0.9rem;color:#aaa}"
+        ".total span{color:#eee;font-weight:bold}"
+        ".bars{display:flex;gap:16px;justify-content:center;align-items:flex-end;margin:16px auto;width:90%;height:600px}"
+        ".bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%}"
+        ".bar-outer{width:100%;flex:1;background:#16213e;border-radius:6px;display:flex;align-items:flex-end;overflow:hidden;border:1px solid #333;position:relative}"
+        ".bar-inner{width:100%;border-radius:6px 6px 0 0;transition:height 0.6s ease}"
+        ".l1{background:#2980b9}.l2{background:#27ae60}.l3{background:#e67e22}"
+        ".bar-watt{font-size:0.85rem;font-weight:bold;color:#eee}"
+        ".bar-amp{font-size:0.7rem;color:#aaa}"
+        ".bar-name{font-size:0.8rem;color:#aaa}"
+        ".scale{position:absolute;right:3px;top:0;bottom:0;display:flex;flex-direction:column;justify-content:space-between;padding:2px 0;pointer-events:none}"
+        ".scale span{font-size:9px;color:#666;line-height:1}"
+        ".status{font-size:0.75rem;color:#aaa;margin-top:8px}"
+        ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:4px}"
+        ".dot.err{background:#e74c3c}"
+        "</style>"
+        "</head>"
+        "<body>"
+        "<h1>&#9889; Strommonitor</h1>"
+        "<div class='kwh-label'>TAGESVERBRAUCH</div>"
+        "<div><span class='kwh' id='kwh'>–</span><span class='kwh-unit'>kWh</span></div>"
+        "<div class='total'>Gesamt: <span id='total'>–</span> W &nbsp;|&nbsp; Skala: <span id='scale-lbl'>–</span></div>"
+        "<div class='bars'>"
+        "<div class='bar-col'><div class='bar-watt' id='w1'>– W</div><div class='bar-amp' id='a1'>– A</div>"
+        "<div class='bar-outer'><div class='bar-inner l1' id='b1' style='height:0%'></div>"
+        "<div class='scale' id='sc1'></div></div><div class='bar-name'>L1</div></div>"
+        "<div class='bar-col'><div class='bar-watt' id='w2'>– W</div><div class='bar-amp' id='a2'>– A</div>"
+        "<div class='bar-outer'><div class='bar-inner l2' id='b2' style='height:0%'></div>"
+        "<div class='scale' id='sc2'></div></div><div class='bar-name'>L2</div></div>"
+        "<div class='bar-col'><div class='bar-watt' id='w3'>– W</div><div class='bar-amp' id='a3'>– A</div>"
+        "<div class='bar-outer'><div class='bar-inner l3' id='b3' style='height:0%'></div>"
+        "<div class='scale' id='sc3'></div></div><div class='bar-name'>L3</div></div>"
+        "</div>"
+        "<div class='status'><span class='dot' id='dot'></span><span id='stxt'>Verbinde...</span>"
+        " &nbsp; <span id='upd'></span></div>"
+        "<p><small>IP: " + ip + ":8080</small></p>"
+        "<script>"
+        "var SCALES=[500,2000,10000,15000];"
+        "function pickScale(m){for(var i=0;i<SCALES.length;i++)if(m<=SCALES[i])return SCALES[i];return 15000;}"
+        # ... restliche Funktionen ...
+        "function fetchData(){"
+        "fetch('/data')"
+        ".then(function(r){return r.json();})"
+        ".then(update)"
+        ".catch(function(){"
+        "document.getElementById('dot').className='dot err';"
+        "document.getElementById('stxt').textContent='Keine Verbindung';"
+        "document.getElementById('upd').textContent=`${new Date().toLocaleDateString('de-DE')} ${new Date().toLocaleTimeString('de-DE')}`;"
+        "})"          // Korrektur
+        "}"           // Ende fetchData
+        "fetchData();setInterval(fetchData,500);"
+        "</script>"
+        "</body></html>"
+    )
 # --- SimpleFTP ---
 class SimpleFTP:
     def __init__(self, host, user, password, port=21):
@@ -176,7 +343,7 @@ class SimpleFTP:
                 pass
             self.sock = None
 
-def upload_and_clear(reason):
+def upload_and_clear(reason,localfile=LOCAL_FILE):
     # 1. Sofort alten Müll (vom vorherigen FTP-Lauf) löschen, BEVOR wir irgendwas tun!
     import gc
     gc.collect() 
@@ -184,10 +351,10 @@ def upload_and_clear(reason):
     _display.draw_text8x8(10, 150, "atempt to ts = get_timestamp()", YELLOW, BLACK)    
     # 2. Erst jetzt, im frisch aufgeräumten RAM, den Zeitstempel generieren
     ts = get_timestamp()
-    remote_name = f"{ts}_messwerte.csv"
+    remote_name = f"{ts}_{localfile}"
+    
     print(f"\n>>> Trigger: {reason}")
     print(f"    Upload als '{remote_name}' | Dateigröße: {file_size()} B | Frei: {free_bytes()} B")
-
     # Sicherheitshalber auch hier aufräumen
     gc.collect()
 
@@ -202,7 +369,7 @@ def upload_and_clear(reason):
         ftp = SimpleFTP(FTP_HOST, FTP_USER, FTP_PASS)
         ftp.connect()
         ftp.cwd(FTP_DIR)
-        success = ftp.upload(LOCAL_FILE, remote_name)
+        success = ftp.upload(localfile, remote_name)
         ftp.disconnect()
         
         # Wichtig: Das Objekt explizit zerstören, damit der RAM freigegeben werden kann
@@ -212,8 +379,8 @@ def upload_and_clear(reason):
 
     if success:
         try:
-            os.remove(LOCAL_FILE)
-            print(f"    Lokal gelöscht. Frei nachher: {free_bytes()} B")
+            os.remove(localfile)
+            print(f"{localfile} lokal gelöscht. Frei nachher: {free_bytes()} B")
         except:
             pass
     else:
@@ -239,14 +406,14 @@ def run():
     Pin(21, Pin.OUT).on()
     
     _display.draw_text8x8(10, 20, "ntptime...", WHITE, BLACK)
-    ntptime.host = "fritz.box"
+    ntptime.host = "fritz.box"  # statt fritz.box
     log('ntptime.host = fritz.box, try ntptime.settime')
     try:
         ntptime.settime()
         _display.draw_text8x8(10, 40, "ntptime OK", GREEN, BLACK)
     except Exception as e:
-        print("NTP Fehler:", e)
-        log("NTP Fehler: "+ e)
+        print("NTP Fehler:", str(e))
+        log("NTP Fehler: "+ str(e))
         _display.draw_text8x8(10, 40, "NTP Fehler", RED, BLACK)
         
     t = time.localtime()
@@ -266,7 +433,7 @@ def run():
     gc.collect()
     print('free memory:', gc.mem_free())
     log('free memory:'+ str(gc.mem_free()))
-    t = time.localtime()
+    t = time.localtime(time.time() + 2 * 3600)
     last_day = t[2]
     last_date_str = "{:04d}{:02d}{:02d}".format(t[0], t[1], t[2])
 
@@ -282,7 +449,7 @@ def run():
     
     i = 0
     load_calibration() 
-    
+    srv = start_webserver()
     # --- Hauptschleife ---
     while True:
         gc.collect()    
@@ -295,6 +462,8 @@ def run():
         try:
             row = append_row(i)
             i += 1
+            handle_web(srv)   # non-blocking, kehrt sofort zurück
+            time.sleep(2)
         except OSError as e:
             print(f"\n[WARNUNG]: ADS Sensor temporär verloren ({e}). Starte I2C-Reset...")
             log(f"\n[WARNUNG]: ADS Sensor temporär verloren ({e}). Starte I2C-Reset...")
@@ -308,16 +477,15 @@ def run():
             
         frei = free_bytes()
         save_interval = 5
-        if i % save_interval == 0:
-            print(f"[{i:5d}] Datei: {file_size():7d} B | Frei: {frei:7d} B | {get_timestamp()}")
-
         if frei < FREE_MIN_BYTES:
-            upload_and_clear("Speicher < 100 KB")
+            for file in FILES:
+                upload_and_clear("Speicher < 100 KB", file)
             last_day = time.localtime()[2]
             last_date_str = "{:04d}{:02d}{:02d}".format(*time.localtime()[:3])
 
         elif today != last_day:
-            upload_and_clear(f"Tageswechsel {last_date_str} → {'{:04d}{:02d}{:02d}'.format(*t[:3])}")
+            for file in FILES:
+                upload_and_clear(f"Tageswechsel {last_date_str} → {'{:04d}{:02d}{:02d}'.format(*t[:3])}", file)
             last_day = today
             last_date_str = "{:04d}{:02d}{:02d}".format(*t[:3])
             
@@ -325,7 +493,8 @@ def run():
             _display.draw_text8x8(10, 200, "vor upload_and_clear(f", WHITE, BLACK)
             reason = f"i % save_interval == 0 {last_date_str} → {'{:04d}{:02d}{:02d}'.format(*t[:3])}"
             log(reason+': '+reason)
-            upload_and_clear(reason)
+            for file in FILES:
+                upload_and_clear(reason, file)
 
 # Einzeltest aus Thonny erlauben
 if __name__ == "__main__":

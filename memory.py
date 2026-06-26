@@ -69,7 +69,7 @@ def run():
             break
 
     print("speicherinfo.py fertig!")
-    
+    return 'memory shown on CYD'
     # HIER WICHTIG: 
     # Wenn die main.py sofort danach wieder die Kontrolle übernimmt, 
     # wollen wir das Backlight vermutlich AN lassen, damit man die Infos lesen kann!
