@@ -79,22 +79,27 @@ def read_rms(channel, samples=800):
     return max(rms, 0.0)
 
 # --- 100% Speicherschonende Kalibrierung (Keine Listen mehr!) ---
-def calibrate(samples=800):
-    """ Ermittelt die exakte Null-Linie (DC-Fehler) ohne RAM-Belastung """
+def calibrate(samples=800, sensor=None):
+    """ Ermittelt die exakte Null-Linie (DC-Fehler) ohne RAM-Belastung.
+        sensor=None: alle 3 Kanäle wie bisher.
+        sensor=0/1/2: bestehende Kalibrierung laden, nur diesen einen Kanal neu messen. """
     global _dc_offsets
-    print("--- Kalibrierung gestartet (Messe DC-Offsets)... ---")
-    
-    for ch in range(3):
+
+    if sensor is not None:
+        load_calibration()   # bestehende Werte holen, damit die anderen 2 Kanäle erhalten bleiben
+        kanaele = [sensor]
+    else:
+        kanaele = range(3)
+
+    print("--- Kalibrierung gestartet (Messe DC-Offsets, Kanäle: {})... ---".format(list(kanaele)))
+
+    for ch in kanaele:
         summe_spannung = 0.0
         for _ in range(samples):
             summe_spannung += _ads_read_diff(ch)
-        
-        # Durchschnitt direkt berechnen, ohne jemals eine Liste erstellt zu haben
         _dc_offsets[ch] = summe_spannung / samples
-    print("Hardware-Spannungsoffsets gelernt:", str(_dc_offsets))    
-    return "Hardware-Spannungsoffsets gelernt: "+ str(_dc_offsets)   
-    
 
+    return "Hardware-Spannungsoffsets gelernt: " + str(_dc_offsets)
 # --- 100% Speicherschonende RMS-Berechnung ---
 def read_rms_calibrated(channel, samples=800):
     """ Berechnet RMS direkt im kontinuierlichen Datenstrom """

@@ -3,10 +3,10 @@ from machine import Pin, SPI
 from ili9341 import Display, color565
 import math, time, gc
 
+# SPI und Display global initialisieren, damit es beim Import bereitsteht
 spi = SPI(1, baudrate=40000000, sck=Pin(14), mosi=Pin(13))
 display = Display(spi, dc=Pin(2), cs=Pin(15), rst=Pin(15),
                   width=320, height=240, rotation=0)
-Pin(21, Pin.OUT).on()
 
 W = 320
 H = 240
@@ -90,54 +90,68 @@ def spitze_berechnen(ax, ay, bx, by, links=True):
         nx = -nx
         ny = -ny
     return mx + nx * h, my + ny * h
+
 # ── Koch: mit inneren und äußeren Dreiecken ab Stufe 2 ───────────────
 def koch_neu(ax, ay, bx, by, tiefe, farbe):
     if tiefe == 0:
         return
 
-    # Teilung der Strecke in 3 Teile
     p1x = ax + (bx - ax) / 3
     p1y = ay + (by - ay) / 3
     p2x = ax + 2 * (bx - ax) / 3
     p2y = ay + 2 * (by - ay) / 3
 
-    # Äußere Spitze (links=True)
     sx_aussen, sy_aussen = spitze_berechnen(p1x, p1y, p2x, p2y, links=True)
-    # Innere Spitze (links=False)
     sx_innen, sy_innen = spitze_berechnen(p1x, p1y, p2x, p2y, links=False)
 
     if tiefe == 1:
-        # Zeichne nur die äußere Spitze (Stufe 1)
         draw_line_clipped(p1x, p1y, sx_aussen, sy_aussen, farbe)
         draw_line_clipped(sx_aussen, sy_aussen, p2x, p2y, farbe)
     else:
-        # Rekursion für äußere und innere Dreiecke
-        # Äußere Kurve (wie bisher)
         koch_neu(ax, ay, p1x, p1y, tiefe-1, farbe)
         koch_neu(p1x, p1y, sx_aussen, sy_aussen, tiefe-1, farbe)
         koch_neu(sx_aussen, sy_aussen, p2x, p2y, tiefe-1, farbe)
         koch_neu(p2x, p2y, bx, by, tiefe-1, farbe)
 
-        # Innere Kurve (ab Stufe 2)
         koch_neu(p1x, p1y, sx_innen, sy_innen, tiefe-1, farbe)
         koch_neu(sx_innen, sy_innen, p2x, p2y, tiefe-1, farbe)
 
     gc.collect()
-display.clear(SCHWARZ)
-print("Zeichne Ausgangsdreieck...")
-zeige_dreieck(GX1, GY, GX2, GY, SPX, SPY, FARBEN[0])
 
-for stufe in range(1, 5):
-    farbe = FARBEN[stufe % len(FARBEN)]
-    print("Stufe {}...".format(stufe))
-    input("Enter")
-    # Linke Seite
-    koch_neu(GX1, GY, SPX, SPY, stufe, farbe)
-    # Rechte Seite
-    koch_neu(SPX, SPY, GX2, GY, stufe, farbe)
-    # Untere Seite
-    koch_neu(GX1, GY, GX2, GY, stufe, farbe)
-time.sleep(3)
-display.clear(SCHWARZ)
-Pin(21, Pin.OUT).off()
-print("koch.py fertig!")
+# ── Launcher Interface ──────────────────────────────────────
+def run():
+    # Hintergrundbeleuchtung einschalten
+    Pin(21, Pin.OUT).on()
+    
+    display.clear(SCHWARZ)
+    print("Zeichne Ausgangsdreieck...")
+    zeige_dreieck(GX1, GY, GX2, GY, SPX, SPY, FARBEN[0])
+
+    for stufe in range(1, 5):
+        farbe = FARBEN[stufe % len(FARBEN)]
+        print("Stufe {}...".format(stufe))
+        
+        # input("Enter") <-- AUSKOMMENTIERT für automatischen Ablauf im Webserver
+        
+        # Linke Seite
+        koch_neu(GX1, GY, SPX, SPY, stufe, farbe)
+        # Rechte Seite
+        koch_neu(SPX, SPY, GX2, GY, stufe, farbe)
+        # Untere Seite
+        koch_neu(GX1, GY, GX2, GY, stufe, farbe)
+        
+        # Kleine Pause zwischen den Stufen, damit man das Muster wachsen sieht
+        time.sleep_ms(500)
+
+    time.sleep(3)
+    display.clear(SCHWARZ)
+    
+    # Hintergrundbeleuchtung ausschalten
+    Pin(21, Pin.OUT).off()
+    print("koch.py fertig!")
+    
+    return "Koch-Schneeflocke erfolgreich gezeichnet (Stufen 1-4)."
+# Dieser Block springt NUR an, wenn du die Datei direkt in Thonny startest.
+# Wird sie über __import__() geladen, bleibt dieser Teil stumm.
+if __name__ == "__main__":
+    run()

@@ -1,1 +1,84 @@
-[2026-06-25 19:59:48] row = append_row() 5 True free memory: 60272
+[2026-06-26 12:55:02] row = append_row() 30 True free memory: 64368
+[2026-06-26 12:55:08] [Dummy-Display] Text: 'Strommonitor 30 2026-06-26 12:55:02 (1.171kWh)'
+[2026-06-26 12:55:08] [Dummy-Display] Text: 'L1:   0.00 A'
+[2026-06-26 12:55:08] [Dummy-Display] Text: 'L2:   0.00 A'
+[2026-06-26 12:55:08] [Dummy-Display] Text: 'L3:   0.00 A'
+[2026-06-26 12:55:08] [Dummy-Display] Text: 'Σ:    0.00 A'
+[2026-06-26 12:55:10] row = append_row() 31 True free memory: 64224
+[2026-06-26 12:55:14] 
+[WARNUNG]: ADS Sensor temporär verloren ([Errno 19] ENODEV). Starte I2C-Reset...
+[2026-06-26 12:55:16] row = append_row() 31 True free memory: 64080
+[2026-06-26 12:55:22] [Dummy-Display] Text: 'Strommonitor 31 2026-06-26 12:55:16 (1.171kWh)'
+[2026-06-26 12:55:22] [Dummy-Display] Text: 'L1:   0.00 A'
+[2026-06-26 12:55:23] [Dummy-Display] Text: 'L2:   0.00 A'
+[2026-06-26 12:55:24] [Dummy-Display] Text: 'L3:   0.00 A'
+[2026-06-26 12:55:24] [Dummy-Display] Text: 'Σ:    0.00 A'
+[2026-06-26 12:55:26] row = append_row() 32 True free memory: 64224
+[2026-06-26 12:55:32] [Dummy-Display] Text: 'Strommonitor 32 2026-06-26 12:55:26 (1.171kWh)'
+[2026-06-26 12:55:32] [Dummy-Display] Text: 'L1:   0.00 A'
+[2026-06-26 12:55:32] [Dummy-Display] Text: 'L2:   0.00 A'
+[2026-06-26 12:55:33] [Dummy-Display] Text: 'L3:   0.00 A'
+[2026-06-26 12:55:33] [Dummy-Display] Text: 'Σ:    0.00 A'
+[2026-06-26 12:55:35] row = append_row() 33 True free memory: 64224
+[2026-06-26 12:55:41] [Dummy-Display] Text: 'Strommonitor 33 2026-06-26 12:55:35 (1.171kWh)'
+[2026-06-26 12:55:41] [Dummy-Display] Text: 'L1:   0.00 A'
+[2026-06-26 12:55:41] [Dummy-Display] Text: 'L2:   0.00 A'
+[2026-06-26 12:55:41] [Dummy-Display] Text: 'L3:   0.00 A'
+[2026-06-26 12:55:41] [Dummy-Display] Text: 'Σ:    0.00 A'
+[2026-06-26 12:55:44] row = append_row() 34 True free memory: 64224
+[2026-06-26 12:55:50] [Dummy-Display] Text: 'Strommonitor 34 2026-06-26 12:55:44 (1.171kWh)'
+[2026-06-26 12:55:50] [Dummy-Display] Text: 'L1:   0.00 A'
+[2026-06-26 12:55:50] [Dummy-Display] Text: 'L2:   0.00 A'
+[2026-06-26 12:55:50] [Dummy-Display] Text: 'L3:   0.00 A'
+[2026-06-26 12:55:50] [Dummy-Display] Text: 'Σ:    0.00 A'
+[2026-06-26 12:55:52] [Dummy-Display] Text: 'vor upload_and_clear(f'
+[2026-06-26 12:55:52] i % save_interval == 0 20260626 → 20260626: i % save_interval == 0 20260626 → 20260626
+[2026-06-26 12:55:53] [Dummy-Display] Text: 'atempt to ts = get_timestamp()'
+[2026-06-26 12:56:07] [Dummy-Display] Text: 'vor self._send('
+[2026-06-26 12:56:11] [Dummy-Display] Text: 'vor self._pasv()'
+[2000-01-01 02:04:12] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2000-01-01 02:04:13] --- sct.init() processed ---
+[2000-01-01 02:04:13] try: sct.calibrate()
+[2000-01-01 02:04:19] try: sct.save_calibration()
+[2000-01-01 02:04:20] New calibration saved [2.8750002e-05, 2.375e-05, 2.8750002e-05]
+[2000-01-01 02:04:30] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2000-01-01 02:04:30] --- sct.init() processed ---
+[2000-01-01 02:04:30] try: sct.calibrate()
+[2000-01-01 02:04:33] Fehler bei der Kalibrierung: [Errno 19] ENODEV
+[2000-01-01 02:04:33] Kalibrierungs-Fehler via programm_starten: [Errno 19] ENODEV
+
+[2000-01-01 02:04:42] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2000-01-01 02:04:42] --- sct.init() processed ---
+[2000-01-01 02:04:42] try: sct.calibrate()
+[2000-01-01 02:04:48] try: sct.save_calibration()
+[2000-01-01 02:04:48] New calibration saved [2.8750002e-05, 2.2500002e-05, 2.375e-05]
+[2000-01-01 02:05:47] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2000-01-01 02:05:47] --- sct.init() processed ---
+[2000-01-01 02:05:47] try: sct.calibrate()
+[2000-01-01 02:05:53] try: sct.save_calibration()
+[2000-01-01 02:05:53] New calibration saved [3.00000036e-05, 2.7500002e-05, 2.8750002e-05]
+[2000-01-01 02:21:49] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2000-01-01 02:21:50] --- sct.init() processed ---
+[2000-01-01 02:21:50] try: sct.calibrate()
+[2000-01-01 02:21:56] try: sct.save_calibration()
+[2000-01-01 02:21:56] New calibration saved [2.8750002e-05, 2.7500002e-05, 3.6250004e-05]
+[2000-01-01 02:29:56] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2000-01-01 02:29:57] --- sct.init() processed ---
+[2000-01-01 02:29:57] try: sct.calibrate()
+[2000-01-01 02:30:03] try: sct.save_calibration()
+[2000-01-01 02:30:03] New calibration saved [3.3750004e-05, 1.3750001e-05, 2.6250002e-05]
+[2000-01-01 02:04:50] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2000-01-01 02:04:51] --- sct.init() processed ---
+[2000-01-01 02:04:51] try: sct.calibrate()
+[2000-01-01 02:04:57] try: sct.save_calibration()
+[2000-01-01 02:04:57] New calibration saved [4.4999992e-05, 2.5000002e-05, 2.6250002e-05]
+[2026-06-26 19:29:44] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2026-06-26 19:29:44] --- sct.init() processed ---
+[2026-06-26 19:29:44] try: sct.calibrate()
+[2026-06-26 19:29:50] try: sct.save_calibration()
+[2026-06-26 19:29:50] New calibration saved [2.6250002e-05, 2.6250002e-05, 4.3749996e-05]
+[2026-06-26 19:44:51] --- Kalibrierung gestartet (Aufruf durch: programm_starten) ---
+[2026-06-26 19:44:52] --- sct.init() processed ---
+[2026-06-26 19:44:52] try: sct.calibrate()
+[2026-06-26 19:44:58] try: sct.save_calibration()
+[2026-06-26 19:44:58] New calibration saved [3.6250004e-05, 3.125e-05, 3.3750004e-05]

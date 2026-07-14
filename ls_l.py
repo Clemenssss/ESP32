@@ -2,26 +2,29 @@ import os
 import time
 
 def run():
-    path="/"
+    path = "/"
     res = [(f, os.stat(path + f)[6], os.stat(path + f)[8])
            for f in os.listdir(path)]
-
-    zeilen = []
-
-    for f, g, s in sorted(res, key=lambda x: x[2], reverse=True):
+    
+    rows = ""
+    alle = sorted(res, key=lambda x: x[2], reverse=True)
+    for f, g, s in alle[:10]:
         t = time.localtime(s)
-        zeile = "{:22s} | {:6d} B | {:04d}-{:02d}-{:02d} {:02d}:{:02d}".format(
-            f, g, t[0], t[1], t[2], t[3], t[4]
-        )
-        
-        if len(zeilen) < 10:  # Only show the first 10 lines
-            print(zeile)
-            zeilen.append(zeile)
-        else:
-            print("zeile",zeile,"not appended")  # Indicate that there are more files not shown    
-
-    return "\n".join(zeilen) + "\n"
-
+        datum = "{:04d}-{:02d}-{:02d} {:02d}:{:02d}".format(t[0], t[1], t[2], t[3], t[4])
+        rows += "<tr><td>{}</td><td style='text-align:right'>{} B</td><td>{}</td></tr>".format(f, g, datum)
+    
+    if len(alle) > 10:
+        rows += "<tr><td colspan='3' style='color:#aaa;font-style:italic'>... {} weitere</td></tr>".format(len(alle) - 10)    
+    return (
+        "<table style='border-collapse:collapse;font-family:monospace;font-size:0.9rem'>"
+        "<tr style='border-bottom:1px solid #aaa'>"
+        "<th style='text-align:left;padding:4px 12px'>Datei</th>"
+        "<th style='text-align:right;padding:4px 12px'>Größe</th>"
+        "<th style='text-align:left;padding:4px 12px'>Datum</th>"
+        "</tr>"
+        + rows +
+        "</table>"
+    )
 
 if __name__ == "__main__":
     run()
