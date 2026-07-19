@@ -8,6 +8,7 @@ from micropython import const  # type: ignore
 
 def color565(r, g, b):
     """Return RGB565 color value.
+
     Args:
         r (int): Red value.
         g (int): Green value.
