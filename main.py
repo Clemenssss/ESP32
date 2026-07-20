@@ -5,7 +5,30 @@ print('running main')
 print('Vor import network, socket, os, time  gc.mem_free()=', gc.mem_free())
 import network, socket, os, time
 print('Nach import network, socket, os, time gc.mem_free()=', gc.mem_free())
-ergebnis = "" 
+from display_utils import turn_off_and_get_dummy
+ergebnis = ""
+def meminfo():
+    import micropython
+    import gc
+# 1. Sammle zuerst den Müll
+    gc.collect()
+# 2. Zeige die detaillierte Speicherübersicht
+    micropython.mem_info(1)    
+def release_display():
+    global _display # Falls dein Display global definiert ist
+    print("Geben Display-Ressourcen frei...")
+    
+    # 1. Backlight aus
+    try:
+        Pin(21, Pin.OUT).off()
+    except:
+        pass
+        
+    # 2. Referenz löschen
+    _display = None
+    
+    # 3. Garbage Collector zwingen, den Framebuffer freizugeben
+    gc.collect()
 def send_redirect(conn, location="/"):
     header = (
         "HTTP/1.1 303 See Other\r\n"
@@ -44,18 +67,19 @@ PROGRAMME = [
 # ── Display-Singleton ──────────────────────────────────────
 _display = None
 _backlight = None
+_spi = None
 
 def get_display():
-    global _display, _backlight
+    global _display, _backlight, _spi
     if _display is None:
         from machine import Pin, SPI
         from ili9341 import Display, color565
-        spi = SPI(1, baudrate=40000000, sck=Pin(14), mosi=Pin(13))
-        _display = Display(spi, dc=Pin(2), cs=Pin(15), rst=Pin(15),
+        _spi = SPI(1, baudrate=40000000, sck=Pin(14), mosi=Pin(13))
+        _display = Display(_spi, dc=Pin(2), cs=Pin(15), rst=Pin(15),
                            width=320, height=240, rotation=0)
         _backlight = Pin(21, Pin.OUT)
         _backlight.on()
-    return _display
+    return _display, _spi
 
 # ── QR-Code auf Display zeigen ─────────────────────────────
 def show_ip(ip):
@@ -64,7 +88,7 @@ def show_ip(ip):
     DISP_W = 320
     DISP_H = 240
     print('show_ip: gc.mem_free()=', gc.mem_free())
-    display = get_display()
+    display, spi = get_display()
     display.clear(color565(0, 0, 0))
     gc.collect()
     try:
@@ -108,21 +132,25 @@ def show_ip(ip):
 
 # ── Programm ausfuehren ────────────────────────────────────
 def programm_starten(dateiname):
+#     # 1. Snapshot der aktuellen Module machen
+#     vorherige_module = set(sys.modules.keys())
     try:
         modul_name = dateiname.replace('/', '').replace('.py', '')
         print('[programm_starten] modul_name=', modul_name)
 
-        if modul_name in sys.modules:
-            del sys.modules[modul_name]
-            print('[programm_starten] altes Modul aus sys.modules entfernt')
+#        if modul_name in sys.modules:
+#            del sys.modules[modul_name]
+#            print('[programm_starten] altes Modul aus sys.modules entfernt')
 
         gc.collect()
         print('[programm_starten] vor __import__ gc.mem_free()=', gc.mem_free())
         modul = __import__(modul_name)
+        print('Imported',modul_name)
         if hasattr(modul, "run"):
             print('[programm_starten] rufe run() auf')
             ergebnis = modul.run()
-            print('[programm_starten] run() beendet)')
+            print('[programm_starten] run() beendet)', ergebnis)
+            meminfo()
             return str(ergebnis) if ergebnis is not None else "(kein Rückgabewert)"
         else:
             msg = "Fehler: Keine run()-Funktion in {} gefunden.".format(dateiname)
@@ -132,7 +160,6 @@ def programm_starten(dateiname):
         log('[programm_starten] Exception: '+ str(e))
         sys.print_exception(e)
         return "Fehler: " + str(e)
-
 # ── HTML Seite ─────────────────────────────────────────────
 def html_seite(ergebnis=""):
     ip = wlan.ifconfig()[0]
@@ -241,7 +268,6 @@ gc.collect()
 print('gc.collect() gc.mem_free()=', gc.mem_free())
 
 # ── Hauptschleife ──────────────────────────────────────────
-# ── Hauptschleife ──────────────────────────────────────────
 while True:
     conn = None
     try:
@@ -287,6 +313,7 @@ while True:
                     
                     gc.collect()
                     modul = __import__('ftptrans')
+                    print('modul.run()',prog)
                     modul.run()
                     sys.exit()
 
@@ -296,6 +323,7 @@ while True:
                 
                 try:
                     ergebnis = programm_starten(prog)
+                    print('programm_starten',prog,'returned',ergebnis)
                 except Exception as e:
                     ergebnis = "Fehler in programm_starten: " + str(e)
                     print("[FEHLER]", ergebnis)
@@ -327,12 +355,16 @@ while True:
             # Ergebnis anzeigen und SOFORT zurücksetzen
             aktuelles_ergebnis = ergebnis
             ergebnis = ""  # ← Sofort zurücksetzen!
-            
+            gc.collect()
             html = html_seite(ergebnis=aktuelles_ergebnis)
+            gc.collect()
             print('HTML generiert in', time.ticks_diff(time.ticks_ms(), t0), 'ms')
             
             try:
                 send_response(conn, html)
+                if _display:
+                    release_display()
+                gc.collect()
             except Exception as e:
                 print("[WEB] Sendefehler:", e)
             finally:

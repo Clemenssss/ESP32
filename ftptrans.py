@@ -11,8 +11,7 @@ from sct import sct_values_get, load_calibration
 from machine import Pin, SPI
 from ili9341 import Display, color565
 from led import LED
-from dummy_display import DummyDisplay
-from logger import logger
+#from logger import logger
 # --- Globale Konfiguration & Konstanten ---
 FTP_HOST       = "fritz.box"
 FTP_DIR        = "/ESP32"
@@ -38,6 +37,8 @@ def turn_off_and_get_dummy(display_instance, spi_instance):
     Schaltet das Backlight aus und gibt das DummyDisplay zurück.
     Keine Hardware-Zerstörung, kein Löschen von sys.modules.
     """
+    from dummy_display import DummyDisplay
+
     print("Schalte um auf Dummy-Display für REPL-Monitor...")
     
     try:
@@ -198,7 +199,10 @@ def handle_web(srv):
             conn, addr = srv.accept()
             print('srv.accept()',conn, addr)
         except OSError as e:
-            print(f"[WEB] OSError: {e}")
+            if e.args[0] in (11, 110, 111):
+                #print(f"[WEB] ignore OSError: {e}")
+                pass
+            
             if e.args[0] in (110, 11):
                 return
             raise e
@@ -279,12 +283,12 @@ def handle_web(srv):
                 conn.close()
             except Exception as e:
                 print(f"[WEB] close() Fehler: {e}")
-def html_dashboard():
+def html_dashboard_x():
     import network
     ip = network.WLAN(network.STA_IF).ifconfig()[0]
     # Alles in einer einzigen, kompakten Zeile (keine Speicher-Fragmentierung durch String-Concat)
     return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strom</title><style>body{background:#1a1a2e;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:10px}h1{color:#e94560;margin:0}.bar{display:flex;gap:10px;justify-content:center;height:200px;margin:10px 0}.b{flex:1;background:#16213e;border-radius:4px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}.i{width:100%;transition:height .3s}.l1{background:#2980b9}.l2{background:#27ae60}.l3{background:#e67e22}</style></head><body><h1>Strom</h1><div class="bar"><div class="b"><div id="b1" class="i l1" style="height:0%"></div></div><div class="b"><div id="b2" class="i l2" style="height:0%"></div></div><div class="b"><div id="b3" class="i l3" style="height:0%"></div></div></div><p id="t">-</p><small>IP: '+ip+'</small><script>function f(){fetch("/data").then(r=>r.json()).then(d=>{let m=Math.max(d.p1,d.p2,d.p3,1);document.getElementById("b1").style.height=(d.p1/m*100)+"%";document.getElementById("b2").style.height=(d.p2/m*100)+"%";document.getElementById("b3").style.height=(d.p3/m*100)+"%";document.getElementById("t").innerText=d.p1+d.p2+d.p3+"W";})}setInterval(f,1000);f();</script></body></html>'                
-def html_dashboard_x():
+def html_dashboard():
     import network
     ip = network.WLAN(network.STA_IF).ifconfig()[0]
     return (
@@ -396,6 +400,24 @@ class SimpleFTP:
         self.sock.send((cmd + "\r\n").encode())
         return self._read()
 
+    def connect(self):
+        try:
+            self.sock = usocket.socket()
+            self.sock.settimeout(10)
+            addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
+            self.sock.connect(addr)
+            print("FTP:", self._read().strip())
+            print(self._send(f"USER {self.user}").strip())
+            print(self._send(f"PASS {self.password}").strip())
+            print('FTP: connected')
+        except Exception as e:
+            # Always close the socket on failure to avoid leaking lwIP resources
+            try:
+                self.sock.close()
+            except Exception:
+                pass
+            raise
+
     def _read(self):
         resp = b""
         self.sock.settimeout(3)
@@ -409,15 +431,6 @@ class SimpleFTP:
                 break
         return resp.decode()
 
-    def connect(self):
-        self.sock = usocket.socket()
-        self.sock.settimeout(10)  # ← neu
-        addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
-        self.sock.connect(addr)
-        print("FTP:" , self._read().strip())
-        print(self._send(f"USER {self.user}").strip())
-        print(self._send(f"PASS {self.password}").strip())
-        print('FTP: connected')
 
     def _pasv(self):
         try:
@@ -494,6 +507,7 @@ def upload_and_clear(reason,localfile=LOCAL_FILE):
     import gc
     gc.collect() 
     _, _, FTP_USER, FTP_PASS = get_credentials()
+    print('get_credentials()',FTP_USER, FTP_PASS)
     _display.draw_text8x8(10, 150, "atempt to ts = get_timestamp()", YELLOW, BLACK)    
     # 2. Erst jetzt, im frisch aufgeräumten RAM, den Zeitstempel generieren
     ts = get_timestamp()
@@ -514,7 +528,16 @@ def upload_and_clear(reason,localfile=LOCAL_FILE):
     success = False
     try:
         ftp = SimpleFTP(FTP_HOST, FTP_USER, FTP_PASS)
-        ftp.connect()
+        print('ftp initialized, do connect')
+        for attempt in range(3):
+            try:
+                ftp.connect()
+                break
+            except OSError as e:
+                print(f"FTP connect attempt {attempt+1} failed:", e)
+                time.sleep(2)
+        else:
+            print("FTP connect finally failed")
         print('ftp connected')
         ftp.cwd(FTP_DIR)
         print('ftp.cwd(FTP_DIR) OK')
@@ -603,7 +626,7 @@ def run():
     print('ntptime.host = fritz.box, try ntptime.settime')
     import utime
     utime.sleep(2)  # Socket-Cleanup abwarten
-    NTP_SERVERS = ["fritz.box", "192.168.178.1", "192.168.178.11"]  # deine IPs
+    NTP_SERVERS = ["fritz.box", "192.168.178.1", "192.168.178.11",'192.168.178.31',"fritz.box", "192.168.178.1", "192.168.178.11"]  # deine IPs
 
     ntp_ok = False
     for host in NTP_SERVERS:
@@ -616,13 +639,15 @@ def run():
             break
         except Exception as e:
             print("NTP Fehler mit",host, str(e))
+            gc.collect()
+            print('memory',gc-memfree())
         continue
 
     if not ntp_ok:
         _display.draw_text8x8(10, 40, "NTP skip", RED, BLACK)
-        print("NTP komplett fehlgeschlagen, fahre ohne Zeit nicht fort")
+        print("NTP completely failed, no use to continue")
         import machine
-        machine.reset()
+        machine.soft_reset()
     t = time.localtime()
     last_day = t[2]
     _display.draw_text8x8(10, 60, "init OK   ", GREEN, BLACK)
@@ -658,8 +683,8 @@ def run():
     srv = start_webserver()
     if not srv:
         return "Webserver not established"
-    save_interval = 5
-    interval_save = False 
+    save_interval = 3
+    interval_save = True
     # --- Hauptschleife ---
     while True:
         gc.collect()    
