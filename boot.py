@@ -1,83 +1,80 @@
-# This file is executed on every boot (including wake-boot from deepsleep)
 # boot.py
 import network
 import time
+import gc
 from machine import Pin
 from credentials import get_credentials
 from logger import logger
-time.sleep_ms(200)
-# ── RGB-LED Pins (Cheap Yellow Display, active LOW: LOW = an, HIGH = aus)
-LED_ROT   = Pin(4,  Pin.OUT, value=1)   # 1 = aus beim Start
-LED_GRUEN = Pin(16, Pin.OUT, value=1)
-LED_BLAU  = Pin(17, Pin.OUT, value=1)
 
-def led_on(led):
-    led.off()   # active low
-def led_off(led):
-    led.on()
+def run_boot():
+    time.sleep_ms(200)
+    
+    # LEDs lokal definieren (werden nach Funktionsende automatisch gelöscht)
+    led_rot   = Pin(4,  Pin.OUT, value=1)
+    led_gruen = Pin(16, Pin.OUT, value=1)
+    led_blau  = Pin(17, Pin.OUT, value=1)
 
-def blink_led(led, count=1, on_ms=400, off_ms=400):
-    for _ in range(count):
-        led_on(led)
-        time.sleep_ms(on_ms)
-        led_off(led)
-        time.sleep_ms(off_ms)
-def log_connect_set_time():
-    import ntptime
-    ntptime.host = "fritz.box"
-    try:
-        # Manchmal braucht UDP/NTP direkt nach dem Connect noch 1-2 Sekunden
-        time.sleep(1) 
-        ntptime.settime()
-        logger.log("NTP OK:" , str(time.localtime()))
-        return True
-    except Exception as e:
-        logger.log("NTP Fehler: " ,  str(e))
-        return False
-# Alle LEDs sicher aus
-led_off(LED_ROT)
-led_off(LED_GRUEN)
-led_off(LED_BLAU)
-# ── WLAN-Verbindung versuchen ──────────────────────────────────
-print("boot.py → WLAN initialisieren")
-wlan = network.WLAN(network.STA_IF)
-wlan.active(True)
-ssid, password, _, _ = get_credentials('/credentials.txt')
-print('ssid, password = ',ssid, password)
-if ssid and password:
-    logger.log('credentiaLS read')
+    # Inline-Hilfsfunktionen sparen globalen RAM
+    def blink(led, count, on_ms, off_ms):
+        for _ in range(count):
+            led.off() # active low = an
+            time.sleep_ms(on_ms)
+            led.on()  # aus
+            time.sleep_ms(off_ms)
+
+    print("boot.py → WLAN initialisieren")
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    
+    # Tupel-Entpacken optimieren (Vermeidung von Dummy-Variablen)
+    ssid, password = get_credentials('/credentials.txt')[:2]
+    
+    if not (ssid and password):
+        logger.log("Keine gültigen Credentials gefunden!")
+        blink(led_rot, 4, 300, 700)
+        led_rot.off()
+        return
+
+    logger.log('credentials read')
+    
     if not wlan.isconnected():
-        logger.log("Verbinde mit:",  str(ssid))
+        # F-Strings (ab MicroPython 1.12+) oder %-Formatierung nutzen statt str()-Verkettung
+        logger.log("Verbinde mit: %s" % ssid)
         wlan.connect(ssid, password)
         
-        timeout = 15           # Sekunden
+        timeout = 15
         start = time.time()
-        logger.log('time received ', str(start))
         while not wlan.isconnected():
-            logger.log('not wlan.isconnected()')
             if time.time() - start > timeout:
                 break
-            time.sleep(0.5)
+            time.sleep_ms(500) # sleep_ms verbraucht weniger Ressourcen als sleep
             print('.', end='')
-    # JETZT erst prüfen, ob wir wirklich drin sind, BEVOR NTP geladen wird
+            
     if wlan.isconnected():
-        # Erst Zeit holen...
-        ntp_success = log_connect_set_time()
-        
-        # ...dann IP loggen
-        logger.log("WLAN verbunden → IP: " ,  str(wlan.ifconfig()[0]))
-        
-        # Wenn NTP geklappt hat -> Grün. Wenn WLAN da, aber NTP tot -> Blau/Gelb/oder trotzdem Grün
-        blink_led(LED_GRUEN, count=3, on_ms=800, off_ms=800)   
-        
-        # Wichtig: hostname setzen solange wlan aktiv ist
+        # NTP-Logik direkt hier einbetten (spart Funktions-Overhead)
+        import ntptime
+        ntptime.host = "fritz.box"
+        time.sleep(1) 
+        try:
+            ntptime.settime()
+            logger.log("NTP OK: %s" % str(time.localtime()))
+        except Exception as e:
+            logger.log("NTP Fehler: %s" % e)
+            
+        logger.log("WLAN verbunden → IP: %s" % wlan.ifconfig()[0])
         wlan.config(dhcp_hostname='esp32')
+        blink(led_gruen, 3, 800, 800)
     else:
         logger.log("WLAN-Verbindung fehlgeschlagen!")
-        blink_led(LED_ROT, count=5, on_ms=200, off_ms=200)
-        led_on(LED_ROT)          
-else:
-    logger.log("Keine gültigen Credentials gefunden!")
-    blink_led(LED_ROT, count=4, on_ms=300, off_ms=700)   
-    led_on(LED_ROT)
-# Ende von boot.py → main.py wird automatisch gestartet (falls vorhanden)
+        blink(led_rot, 5, 200, 200)
+        led_rot.off()
+
+# 1. Boot-Logik in geschütztem Namensraum ausführen
+run_boot()
+
+# 2. Die Funktion und nicht mehr benötigte Imports rigoros aus dem RAM löschen
+del run_boot
+if 'ntptime' in globals(): del ntptime
+
+# 3. Speicher sofort defragmentieren, BEVOR main.py startet
+gc.collect()

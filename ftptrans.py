@@ -1,3 +1,4 @@
+#20260721 stablke version
 # ftp_monior.py — Misst Werte, speichert sie und lädt sie per FTP hoch
 import os
 import time
@@ -140,7 +141,7 @@ def append_row(i):
     #show_values(v1, v2, v3, note)
     
     line = f"{date_str};{time_str};{v1:.3f};{v2:.3f};{v3:.3f};{total_kwh:.4f}"
-    print(line)
+    print(i,line)
     with open(LOCAL_FILE, "a") as f:
         f.write(line.replace(".", ","))
 # In append_row() nach der Messung:
@@ -191,6 +192,7 @@ def start_webserver(max_retries=5):
 
 import errno
 def handle_web(srv):
+    return
     print('handle_web srv')
     conn = None
     try:
@@ -207,22 +209,22 @@ def handle_web(srv):
                 return
             raise e
         
-        print(f"[WEB] Verbindung von {addr}")
+#         print(f"[WEB] Verbindung von {addr}")
         conn.settimeout(None)  # ← exakt wie in main.py, das funktioniert
         req = conn.recv(1024)
-        print(f"[WEB] recv: {len(req)} Bytes")
+#         print(f"[WEB] recv: {len(req)} Bytes")
         
         if not req:
-            print("[WEB] Leerer Request, close")
+#             print("[WEB] Leerer Request, close")
             conn.close()
             return
         
         req_str = req.decode('utf-8', 'ignore')
         pfad = req_str.split(' ')[1] if ' ' in req_str else '/'
-        print(f"[WEB] Pfad: {pfad}")
+#         print(f"[WEB] Pfad: {pfad}")
         
         if pfad in ['/', '/start', '/dashboard']:
-            print("[WEB] Baue HTML...")
+#             print("[WEB] Baue HTML...")
             html = html_dashboard()
             respo = html.encode('utf-8')
             header = (
@@ -232,18 +234,18 @@ def handle_web(srv):
                 "Connection: close\r\n\r\n"
             ).format(len(respo)).encode('utf-8')
             conn.settimeout(10)
-            print(f"[WEB] Vor sendall, {len(header)+len(respo)} Bytes", 'conn.settimeout(10)')
+# #             print(f"[WEB] Vor sendall, {len(header)+len(respo)} Bytes", 'conn.settimeout(10)')
             # In deinem Code, vor und nach sendall:
-            diagnose_socket(conn, "vor sendall")
+#            diagnose_socket(conn, "vor sendall")
             try:
                 conn.sendall(header + respo)
-                diagnose_socket(conn, "nach sendall")
-                print("[WEB] sendall OK")
+#                diagnose_socket(conn, "nach sendall")
+#                 print("[WEB] sendall OK")
             except OSError as e:
                 print(f"[WEB] sendall FEHLER: {e}")
                 
         elif pfad == '/data':
-            print("[WEB] Baue JSON...")
+#             print("[WEB] Baue JSON...")
             try:
                 with open('last_values.json', 'r') as f:
                     body = f.read()
@@ -256,15 +258,15 @@ def handle_web(srv):
                 "Content-Length: {}\r\n"
                 "Connection: close\r\n\r\n"
             ).format(len(body_bytes)).encode('utf-8')
-            print(f"[WEB] Vor sendall data, {len(header)+len(body_bytes)} Bytes")
+#             print(f"[WEB] Vor sendall data, {len(header)+len(body_bytes)} Bytes")
             try:
                 conn.sendall(header + body_bytes)
-                print("[WEB] sendall data OK")
+#                 print("[WEB] sendall data OK")
             except OSError as e:
                 print(f"[WEB] sendall data FEHLER: {e}")
                 
         else:
-            print("[WEB] 404")
+#             print("[WEB] 404")
             try:
                 conn.sendall(b'HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
                 print("[WEB] 404 OK")
@@ -278,7 +280,7 @@ def handle_web(srv):
         print(f"[WEB] Unerwarteter Fehler: {e}")
     finally:
         if conn:
-            print("[WEB] Schließe Verbindung")
+#             print("[WEB] Schließe Verbindung")
             try:
                 conn.close()
             except Exception as e:
@@ -386,10 +388,8 @@ def html_dashboard():
         "</script>"
         "</body></html>"
     )
-# --- SimpleFTP ---
 class SimpleFTP:
     def __init__(self, host, user, password, port=21):
-#         print('__init__(self, host, user, password, port=21)', host, user, port)
         self.host = host
         self.user = user
         self.password = password
@@ -399,24 +399,6 @@ class SimpleFTP:
     def _send(self, cmd):
         self.sock.send((cmd + "\r\n").encode())
         return self._read()
-
-    def connect(self):
-        try:
-            self.sock = usocket.socket()
-            self.sock.settimeout(10)
-            addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
-            self.sock.connect(addr)
-            print("FTP:", self._read().strip())
-            print(self._send(f"USER {self.user}").strip())
-            print(self._send(f"PASS {self.password}").strip())
-            print('FTP: connected')
-        except Exception as e:
-            # Always close the socket on failure to avoid leaking lwIP resources
-            try:
-                self.sock.close()
-            except Exception:
-                pass
-            raise
 
     def _read(self):
         resp = b""
@@ -431,39 +413,48 @@ class SimpleFTP:
                 break
         return resp.decode()
 
+    def connect(self):
+        self.sock = usocket.socket()
+        self.sock.settimeout(10)  # ← neu
+        addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
+        self.sock.connect(addr)
+#         #logger.log("FTP:" , self._read().strip())
+#         #logger.log(self._send(f"USER {self.user}").strip())
+#         #logger.log(self._send(f"PASS {self.password}").strip())
+        #logger.log('FTP: connected')
 
     def _pasv(self):
         try:
             resp = self._send("PASV")
-            print("FTP: PASV Roh-Antwort vom Server:" , str(resp))
+            #logger.log("FTP: PASV Roh-Antwort vom Server:" , str(resp))
 
             # Sicherheitscheck: Kam überhaupt eine korrekte Antwort mit Klammern?
             if not resp or "(" not in resp or ")" not in resp:
-                print("FTP Fehler: Unerwartete PASV Antwort:" , str(resp))
+                #logger.log("FTP Fehler: Unerwartete PASV Antwort:" , str(resp))
                 return None
 
             nums = resp.split("(")[1].split(")")[0].split(",")
 
             # Sicherheitscheck: Haben wir wirklich alle 6 Zahlen für IP und Port?
             if len(nums) < 6:
-                print("FTP Fehler: Ungültiges IP/Port Format in PASV:" , str(nums))
+                #logger.log("FTP Fehler: Ungültiges IP/Port Format in PASV:" , str(nums))
                 return None
 
             data_ip   = ".".join(nums[:4])
             data_port = int(nums[4]) * 256 + int(nums[5])
 
-            print("FTP: Datenverbindung aufbauen zu" + str(data_ip) , ":" , str(data_port))
+            #logger.log("FTP: Datenverbindung aufbauen zu" + str(data_ip) , ":" , str(data_port))
 
             data_sock = usocket.socket()
             # Timeout für den Daten-Socket setzen (sehr wichtig!)
             data_sock.settimeout(10.0) 
 
             data_sock.connect(usocket.getaddrinfo(data_ip, data_port)[0][-1])
-            print("FTP: Daten-Socket erfolgreich verbunden.")
+            #logger.log("FTP: Daten-Socket erfolgreich verbunden.")
             return data_sock
 
         except Exception as e:
-            print("FTP: Schwerer Fehler in _pasv():" , str(e))
+            #logger.log("FTP: Schwerer Fehler in _pasv():" , str(e))
             return None
     def upload(self, local_path, remote_filename):
         time.sleep_ms(200)
@@ -474,7 +465,7 @@ class SimpleFTP:
         _display.draw_text8x8(10, 200, "vor self._pasv()", WHITE, BLACK)
         data_sock = self._pasv()
         time.sleep_ms(200)
-        print("STOR:", self._send(f"STOR {remote_filename}").strip())
+#         print("STOR:", self._send(f"STOR {remote_filename}").strip())
         with open(local_path, "rb") as f:
             while True:
                 chunk = f.read(512)
@@ -483,11 +474,12 @@ class SimpleFTP:
                 data_sock.send(chunk)
         data_sock.close()
         r = self._read()
-        print("Transfer:", r.strip())
+#         print("Transfer:", r.strip())
         return r.startswith("226")
 
     def cwd(self, path):
-        print("CWD:", self._send(f"CWD {path}").strip())
+         print("CWD:", self._send(f"CWD {path}").strip())
+
 
     def disconnect(self):
         try:
@@ -497,7 +489,7 @@ class SimpleFTP:
         if self.sock:
             try:
                 self.sock.close()
-                print("FTP: Control-Socket geschlossen.")
+#                 print("FTP: Control-Socket geschlossen.")
             except:
                 pass
             self.sock = None
@@ -507,17 +499,16 @@ def upload_and_clear(reason,localfile=LOCAL_FILE):
     import gc
     gc.collect() 
     _, _, FTP_USER, FTP_PASS = get_credentials()
-    print('get_credentials()',FTP_USER, FTP_PASS)
+#     print('get_credentials()',FTP_USER, FTP_PASS)
     _display.draw_text8x8(10, 150, "atempt to ts = get_timestamp()", YELLOW, BLACK)    
     # 2. Erst jetzt, im frisch aufgeräumten RAM, den Zeitstempel generieren
     ts = get_timestamp()
     remote_name = f"{ts}_{localfile}"
     
-    print(f"\n>>> Trigger: {reason}")
-    print(f"    Upload als '{remote_name}' | Dateigröße: {file_size()} B | Frei: {free_bytes()} B")
+#     print(f"\n>>> Trigger: {reason}")
+    #logger.log(f"    Upload als '{remote_name}' | Dateigröße: {file_size()} B | Frei: {free_bytes()} B")
     # Sicherheitshalber auch hier aufräumen
     gc.collect()
-
     try:
         ntptime.settime()
     except Exception as e:
@@ -528,38 +519,38 @@ def upload_and_clear(reason,localfile=LOCAL_FILE):
     success = False
     try:
         ftp = SimpleFTP(FTP_HOST, FTP_USER, FTP_PASS)
-        print('ftp initialized, do connect')
+#         print('ftp initialized, do connect')
         for attempt in range(3):
             try:
                 ftp.connect()
                 break
             except OSError as e:
-                print(f"FTP connect attempt {attempt+1} failed:", e)
+#                 print(f"FTP connect attempt {attempt+1} failed:", e)
                 time.sleep(2)
         else:
             print("FTP connect finally failed")
-        print('ftp connected')
+#         print('ftp connected')
         ftp.cwd(FTP_DIR)
-        print('ftp.cwd(FTP_DIR) OK')
+#         print('ftp.cwd(FTP_DIR) OK')
         success = ftp.upload(localfile, remote_name)
-        print('ftp.upload',localfile, remote_name,success)
+#         print('ftp.upload',localfile, remote_name,success)
         ftp.disconnect()
         
         # Wichtig: Das Objekt explizit zerstören, damit der RAM freigegeben werden kann
         del ftp
-        print('del ftp OK')
+#         print('del ftp OK')
     except Exception as e:
-        print("    FTP-Fehler während der Übertragung:", e)
+        #logger.log("    FTP-Fehler während der Übertragung:", e)
+        pass
 
     if success:
         try:
             os.remove(localfile)
-            print(f"{localfile} lokal gelöscht. Frei nachher: {free_bytes()} B")
+#             print(f"{localfile} lokal gelöscht. Frei nachher: {free_bytes()} B")
         except:
             pass
     else:
-        print("    Upload fehlgeschlagen – lokale Datei bleibt!")
-
+         print("    Upload fehlgeschlagen – lokale Datei bleibt!")
     # Nach dem FTP-Lauf sofort wieder saubermachen für die nächsten Messungen
     gc.collect()
     return success
@@ -575,42 +566,39 @@ def blitz_backlight(ms=500):
     _bl.value(1)
     time.sleep_ms(ms)
     _bl.value(0)
-def diagnose_socket(conn, label=""):
-    """Diagnose fuer LwIP-Sockets auf ESP32/MicroPython.
-    getpeername/getsockname/fileno existieren hier NICHT (AttributeError!) -> weggelassen.
-    """
-    print(f"[DIAG] {label} ---")
-
-    # Einziger zuverlaessiger "ist der Socket noch lebendig"-Test: send(b"")
-    try:
-        n = conn.send(b"")
-        print(f"[DIAG] {label} Send-0: {n}")
-    except OSError as e:
-        print(f"[DIAG] {label} Send-0 Fehler: {e.args[0] if e.args else e}")
-    except Exception as e:
-        print(f"[DIAG] {label} Send-0 unerwartet: {e}")
-
-    # select() statt recv(PEEK) - prueft read/write-Bereitschaft ohne zu blockieren
-    try:
-        import select
-        r, w, x = select.select([conn], [conn], [conn], 0)
-        print(f"[DIAG] {label} select: read={bool(r)} write={bool(w)} err={bool(x)}")
-    except Exception as e:
-        print(f"[DIAG] {label} select Fehler: {e}")
-
-    # Heap-Status ist bei euch ohnehin relevant (Fragmentierung!)
-    try:
-        import gc
-        print(f"[DIAG] {label} Heap free: {gc.mem_free()}")
-    except Exception as e:
-        print(f"[DIAG] {label} gc Fehler: {e}")
+# def diagnose_socket(conn, label=""):
+#     # Einziger zuverlaessiger "ist der Socket noch lebendig"-Test: send(b"")
+#     try:
+#         n = conn.send(b"")
+#     except OSError as e:
+#         #logger.log(f"[DIAG] {label} Send-0 Fehler: {e.args[0] if e.args else e}")
+#         pass
+#     except Exception as e:
+#         #logger.log(f"[DIAG] {label} Send-0 unerwartet: {e}")
+#         pass
+# 
+#     # select() statt recv(PEEK) - prueft read/write-Bereitschaft ohne zu blockieren
+#     try:
+#         import select
+#         r, w, x = select.select([conn], [conn], [conn], 0)
+# #         print(f"[DIAG] {label} select: read={bool(r)} write={bool(w)} err={bool(x)}")
+#     except Exception as e:
+#         pass
+#         #logger.log(f"[DIAG] {label} select Fehler: {e}")
+# 
+#     # Heap-Status ist bei euch ohnehin relevant (Fragmentierung!)
+#     try:
+#         import gc
+# #         print(f"[DIAG] {label} Heap free: {gc.mem_free()}")
+#     except Exception as e:
+#         print(f"[DIAG] {label} gc Fehler: {e}")
     
-    print(f"[DIAG] {label} --- END")
+#     print(f"[DIAG] {label} --- END")
 # --- Hauptfunktion ---
 def run():
     # Herausfinden, wer gestartet hat, via Namensraum
     caller = "direkt/main" if __name__ == "__main__" else "programm_starten"
-    print('ftptrans caller:', caller)
+    #logger.log('ftptrans caller:', caller)
     global _display, led
     
     led = LED()
@@ -621,31 +609,32 @@ def run():
                        width=320, height=240, rotation=0)
     Pin(21, Pin.OUT).on()
     
-    _display.draw_text8x8(10, 20, "ntptime...", WHITE, BLACK)
-    ntptime.host = "fritz.box"  # statt fritz.box
-    print('ntptime.host = fritz.box, try ntptime.settime')
     import utime
     utime.sleep(2)  # Socket-Cleanup abwarten
     NTP_SERVERS = ["fritz.box", "192.168.178.1", "192.168.178.11",'192.168.178.31',"fritz.box", "192.168.178.1", "192.168.178.11"]  # deine IPs
 
     ntp_ok = False
-    for host in NTP_SERVERS:
-        try:
-            ntptime.host = host
-            ntptime.settime()
-            _display.draw_text8x8(10, 40, "ntptime OK", GREEN, BLACK)
-            print('ntptime.settime() success, host=' , host)
-            ntp_ok = True
-            break
-        except Exception as e:
-            print("NTP Fehler mit",host, str(e))
-            gc.collect()
-            print('memory',gc-memfree())
-        continue
+    for i in range(3):
+        for host in NTP_SERVERS:
+            try:
+                _display.draw_text8x8(10, 20, host, WHITE, BLACK)
+                ntptime.host = host
+                ntptime.settime()
+                _display.draw_text8x8(10, 40, "ntptime OK", GREEN, BLACK)
+#             print('ntptime.settime() success, host=' , host)
+                ntp_ok = True
+                blink()
+                break
+            except Exception as e:
+#   	          print("NTP Fehler mit",host, str(e))
+                blink(color='red')    
+                gc.collect()
+#             print('memory',gc-memfree())
+            continue
 
     if not ntp_ok:
         _display.draw_text8x8(10, 40, "NTP skip", RED, BLACK)
-        print("NTP completely failed, no use to continue")
+        #logger.log("NTP completely failed, no use to continue")
         import machine
         machine.soft_reset()
     t = time.localtime()
@@ -660,19 +649,19 @@ def run():
     if not wlan:
         print('not wlan')
         import machine
-        machine.reset()
-    print('before switching off display wlan.isconnected()', str(wlan.isconnected()))
+        machine.soft_reset()
+    #logger.log('before switching off display wlan.isconnected()', str(wlan.isconnected()))
     gc.collect()
-    print('free memory:', gc.mem_free())
-    print('free memory:', str(gc.mem_free()))
+#     print('free memory:', gc.mem_free())
+#     print('free memory:', str(gc.mem_free()))
     t = time.localtime(time.time() + 2 * 3600)
     last_day = t[2]
     last_date_str = "{:04d}{:02d}{:02d}".format(t[0], t[1], t[2])
-    print(f"Flash total: {os.statvfs('/')[0] * os.statvfs('/')[2] // 1024} KB")
-    print(f"Flash frei:  {free_bytes() // 1024} KB")
+#     print(f"Flash total: {os.statvfs('/')[0] * os.statvfs('/')[2] // 1024} KB")
+#     print(f"Flash frei:  {free_bytes() // 1024} KB")
     
     # Jetzt auf DummyDisplay umschalten
-    print('_display = turn_off_and_get_dummy(_display, _spi)')
+#     print('_display = turn_off_and_get_dummy(_display, _spi)')
     _display = turn_off_and_get_dummy(_display, _spi)
     gc.collect()
     
@@ -684,11 +673,11 @@ def run():
     if not srv:
         return "Webserver not established"
     save_interval = 3
-    interval_save = True
+    interval_save = False 
     # --- Hauptschleife ---
     while True:
         gc.collect()    
-        print('row = append_row() ', str(i),' ', str(wlan.isconnected()), ' free memory: ', str(gc.mem_free()))
+#         print('row = append_row() ', str(i),' ', str(wlan.isconnected()), ' free memory: ', str(gc.mem_free()))
         if not ftp_active:  # Nur Webserver bedienen, wenn kein FTP läuft
              handle_web(srv)  # Non-blocking, kehrt sofort zurück
         t = time.localtime(time.time() + 2 * 3600)
@@ -703,12 +692,11 @@ def run():
             blink()
             blitz_backlight()
         except OSError as e:
-            print(f"[WARNUNG]: ADS Sensor temporär verloren ({e}). Starte I2C-Reset...")
             try:
                 load_calibration() 
-                print("-> Sensor erfolgreich reinitialisiert!")
             except Exception as reset_err:
-                print("-> Reinitialisierung fehlgeschlagen:", reset_err)
+                #logger.log("-> Reinitialisierung fehlgeschlagen:", reset_err)
+                pass
             time.sleep(2)
             continue
             
@@ -729,7 +717,7 @@ def run():
             
         elif i % save_interval == 0 and interval_save:
             reason = f"i % save_interval == 0 {last_date_str} → {'{:04d}{:02d}{:02d}'.format(*t[:3])}"
-            print(reason,':',reason)
+#             print(reason,':',reason)
             ftp_active = True
             for file in FILES:
                 upload_and_clear(reason, file)
