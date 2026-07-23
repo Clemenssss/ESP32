@@ -396,6 +396,23 @@ class SimpleFTP:
         self.port = port
         self.sock = None
 
+    def cwd(self, path):
+        resp = self._send(f"CWD {path}")
+        logger.log("FTP: CWD response", resp.strip())
+        return resp
+    def disconnect(self):
+        try:
+            self._send("QUIT")
+        except:
+            pass
+        if self.sock:
+            try:
+                self.sock.close()
+#                 print("FTP: Control-Socket geschlossen.")
+            except:
+                pass
+            self.sock = None
+
     def _send(self, cmd):
         self.sock.send((cmd + "\r\n").encode())
         return self._read()
@@ -414,30 +431,32 @@ class SimpleFTP:
         return resp.decode()
 
     def connect(self):
-        self.sock = usocket.socket()
-        self.sock.settimeout(10)  # ← neu
-        addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
-        self.sock.connect(addr)
-#         #logger.log("FTP:" , self._read().strip())
-#         #logger.log(self._send(f"USER {self.user}").strip())
-#         #logger.log(self._send(f"PASS {self.password}").strip())
-        #logger.log('FTP: connected')
-
+        try:
+            self.sock = usocket.socket()
+            self.sock.settimeout(10)  # ← neu
+            addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
+            self.sock.connect(addr)
+            logger.log("FTP:" , self._read().strip())
+            logger.log(self._send(f"USER {self.user}").strip())
+            logger.log(self._send(f"PASS {self.password}").strip())
+            logger.log('FTP: connected')
+        except Exception as e:
+            logger.log('FTP: connect exception',e)
     def _pasv(self):
         try:
             resp = self._send("PASV")
-            #logger.log("FTP: PASV Roh-Antwort vom Server:" , str(resp))
+            logger.log("FTP: PASV Roh-Antwort vom Server:" , str(resp))
 
             # Sicherheitscheck: Kam überhaupt eine korrekte Antwort mit Klammern?
             if not resp or "(" not in resp or ")" not in resp:
-                #logger.log("FTP Fehler: Unerwartete PASV Antwort:" , str(resp))
+                logger.log("FTP Fehler: Unerwartete PASV Antwort:" , str(resp))
                 return None
 
             nums = resp.split("(")[1].split(")")[0].split(",")
 
             # Sicherheitscheck: Haben wir wirklich alle 6 Zahlen für IP und Port?
             if len(nums) < 6:
-                #logger.log("FTP Fehler: Ungültiges IP/Port Format in PASV:" , str(nums))
+                logger.log("FTP Fehler: Ungültiges IP/Port Format in PASV:" , str(nums))
                 return None
 
             data_ip   = ".".join(nums[:4])
@@ -450,54 +469,67 @@ class SimpleFTP:
             data_sock.settimeout(10.0) 
 
             data_sock.connect(usocket.getaddrinfo(data_ip, data_port)[0][-1])
-            #logger.log("FTP: Daten-Socket erfolgreich verbunden.")
+            logger.log("FTP: Daten-Socket erfolgreich verbunden.")
             return data_sock
 
         except Exception as e:
-            #logger.log("FTP: Schwerer Fehler in _pasv():" , str(e))
+            logger.log("FTP: Schwerer Fehler in _pasv():" , str(e))
             return None
     def upload(self, local_path, remote_filename):
-        time.sleep_ms(200)
-        _display.draw_text8x8(10, 200, "vor self._send(", WHITE, BLACK)
-        time.sleep_ms(200)
-        self._send("TYPE I")
-        time.sleep_ms(200)
-        _display.draw_text8x8(10, 200, "vor self._pasv()", WHITE, BLACK)
-        data_sock = self._pasv()
-        time.sleep_ms(200)
-#         print("STOR:", self._send(f"STOR {remote_filename}").strip())
-        with open(local_path, "rb") as f:
-            while True:
-                chunk = f.read(512)
-                if not chunk:
-                    break
-                data_sock.send(chunk)
-        data_sock.close()
-        r = self._read()
-#         print("Transfer:", r.strip())
-        return r.startswith("226")
+       logger.log('upload', local_path, remote_filename)
+       time.sleep_ms(200)
+       _display.draw_text8x8(10, 200, "vor self._send(", WHITE, BLACK)
+       time.sleep_ms(200)
+       self._send("TYPE I")
+       time.sleep_ms(200)
+       _display.draw_text8x8(10, 200, "vor self._pasv()", WHITE, BLACK)
+       data_sock = self._pasv()
+       time.sleep_ms(200)
+    
+       # Pre-calculate total chunk count for progress logging
+       file_size = os.stat(local_path)[6]
+       chunk_size = 512
+       total_chunks = (file_size + chunk_size - 1) // chunk_size
+       logger.log(f"FTP: uploading {file_size} bytes in {total_chunks} chunks")
+    
+       self._send(f"STOR {remote_filename}")
+    
+       chunk_index = 0
+       bytes_sent = 0
+       last_logged_bytes = 0
+       log_interval = 50 * 1024  # log every 50 KB
+    
+       with open(local_path, "rb") as f:
+           while True:
+               chunk = f.read(chunk_size)
+               if not chunk:
+                   break
+               data_sock.send(chunk)
+               chunk_index += 1
+               bytes_sent += len(chunk)
+    
+               if bytes_sent - last_logged_bytes >= log_interval:
+                   logger.log(f"FTP: chunk {chunk_index} of {total_chunks}")
+                   last_logged_bytes = bytes_sent
+    
+       logger.log(f"FTP: uploaded all {total_chunks} chunks")
+    
+       data_sock.close()
+       r = self._read()
+       return r.startswith("226")
 
-    def cwd(self, path):
-         print("CWD:", self._send(f"CWD {path}").strip())
-
-
-    def disconnect(self):
-        try:
-            self._send("QUIT")
-        except:
-            pass
-        if self.sock:
-            try:
-                self.sock.close()
-#                 print("FTP: Control-Socket geschlossen.")
-            except:
-                pass
-            self.sock = None
-
-def upload_and_clear(reason,localfile=LOCAL_FILE):
+def upload_and_clear(reason, localfile=LOCAL_FILE):
     # 1. Sofort alten Müll (vom vorherigen FTP-Lauf) löschen, BEVOR wir irgendwas tun!
     import gc
-    gc.collect() 
+    gc.collect()
+
+    # 0. Check if the local file even exists before doing anything else
+    try:
+        file_size = os.stat(localfile)[6]
+    except OSError:
+        logger.log("Upload skipped: file does not exist", localfile)
+        return False
+    logger.log("Upload", localfile, file_size, "bytes")
     _, _, FTP_USER, FTP_PASS = get_credentials()
 #     print('get_credentials()',FTP_USER, FTP_PASS)
     _display.draw_text8x8(10, 150, "atempt to ts = get_timestamp()", YELLOW, BLACK)    
@@ -523,6 +555,7 @@ def upload_and_clear(reason,localfile=LOCAL_FILE):
         for attempt in range(3):
             try:
                 ftp.connect()
+                logger.log('break')
                 break
             except OSError as e:
 #                 print(f"FTP connect attempt {attempt+1} failed:", e)
@@ -530,8 +563,9 @@ def upload_and_clear(reason,localfile=LOCAL_FILE):
         else:
             print("FTP connect finally failed")
 #         print('ftp connected')
+        logger.log('next ftp.cwd(FTP_DIR)',FTP_DIR)
         ftp.cwd(FTP_DIR)
-#         print('ftp.cwd(FTP_DIR) OK')
+        logger.log('upload',localfile, 'to',remote_name)
         success = ftp.upload(localfile, remote_name)
 #         print('ftp.upload',localfile, remote_name,success)
         ftp.disconnect()
@@ -673,7 +707,7 @@ def run():
     if not srv:
         return "Webserver not established"
     save_interval = 3
-    interval_save = False 
+    interval_save = False   
     # --- Hauptschleife ---
     while True:
         gc.collect()    
