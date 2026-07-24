@@ -192,7 +192,7 @@ def start_webserver(max_retries=5):
 
 import errno
 def handle_web(srv):
-    return
+    #return
     print('handle_web srv')
     conn = None
     try:
@@ -202,11 +202,10 @@ def handle_web(srv):
             print('srv.accept()',conn, addr)
         except OSError as e:
             if e.args[0] in (11, 110, 111):
-                #print(f"[WEB] ignore OSError: {e}")
                 pass
-            
             if e.args[0] in (110, 11):
                 return
+            logger(f"[WEB] raise OSError: {e}")
             raise e
         
 #         print(f"[WEB] Verbindung von {addr}")
@@ -215,16 +214,16 @@ def handle_web(srv):
 #         print(f"[WEB] recv: {len(req)} Bytes")
         
         if not req:
-#             print("[WEB] Leerer Request, close")
+            logger.log("[WEB] Leerer Request, close")
             conn.close()
             return
         
         req_str = req.decode('utf-8', 'ignore')
         pfad = req_str.split(' ')[1] if ' ' in req_str else '/'
-#         print(f"[WEB] Pfad: {pfad}")
+        logger.log(f"[WEB] Pfad: {pfad}")
         
         if pfad in ['/', '/start', '/dashboard']:
-#             print("[WEB] Baue HTML...")
+            logger.log("[WEB] Baue HTML...")
             html = html_dashboard()
             respo = html.encode('utf-8')
             header = (
@@ -242,10 +241,10 @@ def handle_web(srv):
 #                diagnose_socket(conn, "nach sendall")
 #                 print("[WEB] sendall OK")
             except OSError as e:
-                print(f"[WEB] sendall FEHLER: {e}")
+                logger.log(f"[WEB] sendall FEHLER: {e}")
                 
         elif pfad == '/data':
-#             print("[WEB] Baue JSON...")
+            logger.log("[WEB] Baue JSON...")
             try:
                 with open('last_values.json', 'r') as f:
                     body = f.read()
@@ -263,7 +262,7 @@ def handle_web(srv):
                 conn.sendall(header + body_bytes)
 #                 print("[WEB] sendall data OK")
             except OSError as e:
-                print(f"[WEB] sendall data FEHLER: {e}")
+                logger.log(f"[WEB] sendall /data FEHLER: {e}")
                 
         else:
 #             print("[WEB] 404")
@@ -275,21 +274,16 @@ def handle_web(srv):
                 
     except OSError as e:
         if e.args[0] not in (110, 11, 116):
-            print(f"[WEB] Socket-Fehler: {e}")
+            logger.log(f"[WEB] Socket-Fehler: {e}")
     except Exception as e:
-        print(f"[WEB] Unerwarteter Fehler: {e}")
+        logger.log(f"[WEB] Unerwarteter Fehler: {e}")
     finally:
         if conn:
 #             print("[WEB] Schließe Verbindung")
             try:
                 conn.close()
             except Exception as e:
-                print(f"[WEB] close() Fehler: {e}")
-def html_dashboard_x():
-    import network
-    ip = network.WLAN(network.STA_IF).ifconfig()[0]
-    # Alles in einer einzigen, kompakten Zeile (keine Speicher-Fragmentierung durch String-Concat)
-    return '<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Strom</title><style>body{background:#1a1a2e;color:#eee;font-family:sans-serif;text-align:center;margin:0;padding:10px}h1{color:#e94560;margin:0}.bar{display:flex;gap:10px;justify-content:center;height:200px;margin:10px 0}.b{flex:1;background:#16213e;border-radius:4px;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}.i{width:100%;transition:height .3s}.l1{background:#2980b9}.l2{background:#27ae60}.l3{background:#e67e22}</style></head><body><h1>Strom</h1><div class="bar"><div class="b"><div id="b1" class="i l1" style="height:0%"></div></div><div class="b"><div id="b2" class="i l2" style="height:0%"></div></div><div class="b"><div id="b3" class="i l3" style="height:0%"></div></div></div><p id="t">-</p><small>IP: '+ip+'</small><script>function f(){fetch("/data").then(r=>r.json()).then(d=>{let m=Math.max(d.p1,d.p2,d.p3,1);document.getElementById("b1").style.height=(d.p1/m*100)+"%";document.getElementById("b2").style.height=(d.p2/m*100)+"%";document.getElementById("b3").style.height=(d.p3/m*100)+"%";document.getElementById("t").innerText=d.p1+d.p2+d.p3+"W";})}setInterval(f,1000);f();</script></body></html>'                
+                logger.log(f"[WEB] finally close() Fehler: {e}")
 def html_dashboard():
     import network
     ip = network.WLAN(network.STA_IF).ifconfig()[0]
@@ -707,7 +701,7 @@ def run():
     if not srv:
         return "Webserver not established"
     save_interval = 3
-    interval_save = False   
+    interval_save = False #True #  
     # --- Hauptschleife ---
     while True:
         gc.collect()    
@@ -719,7 +713,6 @@ def run():
         try:
             row = append_row(i)
             i += 1
-            #handle_web(srv)   # non-blocking, kehrt sofort zurück
             time.sleep(2)
             if not ftp_active:  # Nur Webserver bedienen, wenn kein FTP läuft
                 handle_web(srv)  # Non-blocking, kehrt sofort zurück
@@ -729,7 +722,7 @@ def run():
             try:
                 load_calibration() 
             except Exception as reset_err:
-                #logger.log("-> Reinitialisierung fehlgeschlagen:", reset_err)
+                logger.log("-> Reinitialisierung fehlgeschlagen:", reset_err)
                 pass
             time.sleep(2)
             continue
