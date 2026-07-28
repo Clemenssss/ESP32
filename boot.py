@@ -35,11 +35,11 @@ def run_boot():
         led_rot.off()
         return
 
-    logger.log('credentials read')
+    #logger.log('credentials read')
     
     if not wlan.isconnected():
         # F-Strings (ab MicroPython 1.12+) oder %-Formatierung nutzen statt str()-Verkettung
-        logger.log("Verbinde mit: %s" % ssid)
+        #logger.log("Verbinde mit: %s" % ssid)
         wlan.connect(ssid, password)
         
         timeout = 15
@@ -52,16 +52,17 @@ def run_boot():
             
     if wlan.isconnected():
         # NTP-Logik direkt hier einbetten (spart Funktions-Overhead)
+        wlan.config(pm=network.WLAN.PM_NONE)  # disable WiFi power-save (modem sleep)
         import ntptime
         ntptime.host = "fritz.box"
         time.sleep(1) 
         try:
             ntptime.settime()
-            logger.log("NTP OK: %s" % str(time.localtime()))
+            #logger.log("NTP OK: %s" % str(time.localtime()))
         except Exception as e:
             logger.log("NTP Fehler: %s" % e)
             
-        logger.log("WLAN verbunden → IP: %s" % wlan.ifconfig()[0])
+        #logger.log("WLAN verbunden → IP: %s" % wlan.ifconfig()[0])
         wlan.config(dhcp_hostname='esp32')
         blink(led_gruen, 3, 800, 800)
     else:
@@ -72,9 +73,9 @@ def run_boot():
 # 1. Boot-Logik in geschütztem Namensraum ausführen
 run_boot()
 
-# 2. Die Funktion und nicht mehr benötigte Imports rigoros aus dem RAM löschen
-del run_boot
-if 'ntptime' in globals(): del ntptime
+# # 2. Die Funktion und nicht mehr benötigte Imports rigoros aus dem RAM löschen
+# del run_boot
+# if 'ntptime' in globals(): del ntptime
 
 # 3. Speicher sofort defragmentieren, BEVOR main.py startet
 gc.collect()

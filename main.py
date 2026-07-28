@@ -6,6 +6,8 @@ print('Vor import network, socket, os, time  gc.mem_free()=', gc.mem_free())
 import network, socket, os, time
 print('Nach import network, socket, os, time gc.mem_free()=', gc.mem_free())
 from display_utils import turn_off_and_get_dummy
+from logger import logger
+from ftptrans import blink, blitz_backlight
 ergebnis = ""
 def meminfo():
     import micropython
@@ -59,6 +61,7 @@ PROGRAMME = [
     'hilbert.py',
     'koch.py',
     'ls_l.py',
+    'manual_upload.py',
     'memory.py',
     'showlog.py',
     'spirale.py',
@@ -120,9 +123,11 @@ def show_ip(ip):
                         start_x + c * box_size,
                         start_y + r * box_size,
                         box_size, box_size, black)
-        print('QR-Code fertig, gc.mem_free()=', gc.mem_free())
+        #print('QR-Code fertig, gc.mem_free()=', gc.mem_free())
+        blink(count=1)                
     except Exception as e:
-        log('Fehler in show_ip: '+ str(e))
+        blink(color='red')
+        #logger.log('Fehler in show_ip: '+ str(e))
         sys.print_exception(e)
         white = color565(255, 255, 255)
         black = color565(0, 0, 0)
@@ -157,7 +162,7 @@ def programm_starten(dateiname):
             print('[programm_starten]', msg)
             return msg
     except Exception as e:
-        log('[programm_starten] Exception: '+ str(e))
+        logger.log('[programm_starten] Exception: '+ str(e))
         sys.print_exception(e)
         return "Fehler: " + str(e)
 # ── HTML Seite ─────────────────────────────────────────────
@@ -255,32 +260,60 @@ def unload_module(name):
     for k in to_remove:
         del sys.modules[k]
     gc.collect()
+# start measure immediately
+#import network
+sta_if = network.WLAN(network.STA_IF)
+prog = 'ftptrans'
+gc.collect()
+modul = __import__('ftptrans')
+print('modul.run()',prog)
+print("WLAN-Status:", sta_if.isconnected(), sta_if.ifconfig())
+modul.run()
+logger.log('modul.run() unexpectedly finished')
+logger.log('modul.run() unexpectedly continue')
 # ── Webserver starten ──────────────────────────────────────
+print('start webserver at address', wlan.ifconfig()[0])
 server = socket.socket()
 server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 server.bind(('', 80))
 server.listen(3)
-print("Webserver: http://{}".format(wlan.ifconfig()[0]))
-print('Vor show_ip gc.mem_free()=', gc.mem_free())
+#print("Webserver: http://{}".format(wlan.ifconfig()[0]))
+#print('Vor show_ip gc.mem_free()=', gc.mem_free())
 show_ip(wlan.ifconfig()[0])
+
 print('Nach show_ip gc.mem_free()=', gc.mem_free())
 gc.collect()
 print('gc.collect() gc.mem_free()=', gc.mem_free())
 
 # ── Hauptschleife ──────────────────────────────────────────
 while True:
+    print('while True:')
+    blink()
+    print('after blink()')
     conn = None
     try:
+        print('before conn, addr = server.accept()')
         conn, addr = server.accept()
         print('Verbindung von', addr)
         
         # WICHTIG: Kurzer Timeout für den Request-Empfang
-        conn.settimeout(5)
-        
-        req = conn.recv(4096)
+                # WICHTIG: Kein starrer Timeout, sondern nicht-blockierend antesten
+        conn.settimeout(0.2) 
+        try:
+            req = conn.recv(4096)
+        except OSError:
+            # Timeout beim Warten auf Daten abfangen
+            req = b""
+            
         if not req:
-            conn.close()
-            continue
+            try:
+                conn.close()
+                print('not req conn.close()')
+                continue
+            except:
+                print('not req exception conn.close()')
+                pass
+                
 
         methode, pfad, body = parse_request(req)
         print('Request:', methode, pfad)
@@ -362,17 +395,19 @@ while True:
             
             try:
                 send_response(conn, html)
+                blink(count=1)
                 if _display:
                     release_display()
+                    blink(count=2)
                 gc.collect()
             except Exception as e:
+                blink(count=1,color='red')
                 print("[WEB] Sendefehler:", e)
             finally:
                 try:
                     conn.close()
                 except:
                     pass
-
         # === Alles andere ===
         else:
             send_response(conn, html_seite())
@@ -380,7 +415,9 @@ while True:
 
     except OSError as e:
         # Timeout oder Socket-Fehler
-        print("OS-Fehler:", e)
+        print('# Timeout oder Socket-Fehler',e)
+        if e.args[0] not in (113, 104):
+            print("Echter OS-Fehler:", e)
         if conn:
             try:
                 conn.close()
@@ -396,4 +433,5 @@ while True:
                 conn.close()
             except:
                 pass
-        gc.collect()
+    gc.collect()
+    print('end while')
