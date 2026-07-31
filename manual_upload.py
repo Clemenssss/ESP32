@@ -1,4 +1,5 @@
 from ftptrans import upload_and_clear
+from logger import logger
 def run():
     try:
         for f in ['messwerte.csv','system_log.txt']:

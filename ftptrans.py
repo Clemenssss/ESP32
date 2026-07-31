@@ -13,6 +13,7 @@ from machine import Pin, SPI
 from ili9341 import Display, color565
 from led import LED
 from logger import logger
+from boot import run_boot
 # --- Globale Konfiguration & Konstanten ---
 FTP_HOST       = "fritz.box"
 FTP_DIR        = "/ESP32"
@@ -199,7 +200,7 @@ def handle_web(srv):
         try:
             conn, addr = srv.accept()
             gc.collect()
-            print('srv.accept()',conn, addr)
+            #print('srv.accept()',conn, addr)
         except OSError as e:
             if e.args[0] in (11, 110, 111):
                 pass
@@ -525,9 +526,9 @@ class SimpleFTP:
        file_size = os.stat(local_path)[6]
        chunk_size = 512
        total_chunks = (file_size + chunk_size - 1) // chunk_size
-       blink(color='green', count=total_chunks, on_ms=100, off_ms=100)
+       blink(color='green', count=3, on_ms=100, off_ms=100)
        gc.collect()
-       #logger.log(f"FTP: uploading {file_size} bytes in {total_chunks} chunks")
+       logger.log(f"FTP: uploading {local_path} {file_size} bytes in {total_chunks} chunks")
     
        self._send(f"STOR {remote_filename}")
        gc.collect()
@@ -546,7 +547,7 @@ class SimpleFTP:
                gc.collect()
                chunk_index += 1
                bytes_sent += len(chunk)
-    
+               print('.',end='')
                if bytes_sent - last_logged_bytes >= log_interval:
                    #logger.log(f"FTP: chunk {chunk_index} of {total_chunks}")
                    blitz_backlight()
@@ -655,7 +656,7 @@ def upload_and_clear(reason, localfile=LOCAL_FILE):
     else:
          blink(color='red')
          gc.collect()
-         blitz_backlightr()
+         blitz_backlight()
          gc.collect()
          blink(color='red')
          gc.collect()
@@ -764,6 +765,8 @@ def run():
     interval_save = False #True #  
     # --- Hauptschleife ---
     while True:
+        if not wlan:
+            run_boot()
         gc.collect()
         if not ftp_active:  # Nur Webserver bedienen, wenn kein FTP läuft
              handle_web(srv)  # Non-blocking, kehrt sofort zurück

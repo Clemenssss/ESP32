@@ -1,437 +1,1250 @@
+#20260721 stablke versiofn
+# ftp_monior.py — Misst Werte, speichert sie und lädt sie per FTP hoch
+import os
+import time
+import random
+import ntptime
+import usocket
 import gc
 import sys
-import os
-print('running main')
-print('Vor import network, socket, os, time  gc.mem_free()=', gc.mem_free())
-import network, socket, os, time
-print('Nach import network, socket, os, time gc.mem_free()=', gc.mem_free())
-from display_utils import turn_off_and_get_dummy
+from credentials import get_credentials
+from sct import sct_values_get, load_calibration
+from machine import Pin, SPI
+from ili9341 import Display, color565
+from led import LED
 from logger import logger
-from ftptrans import blink, blitz_backlight
-ergebnis = ""
-def meminfo():
-    import micropython
-    import gc
-# 1. Sammle zuerst den Müll
-    gc.collect()
-# 2. Zeige die detaillierte Speicherübersicht
-    micropython.mem_info(1)    
-def release_display():
-    global _display # Falls dein Display global definiert ist
-    print("Geben Display-Ressourcen frei...")
+# --- Globale Konfiguration & Konstanten ---
+FTP_HOST       = "fritz.box"
+FTP_DIR        = "/ESP32"
+LOCAL_FILE     = "messwerte.csv"
+LOCAL_LOGFILE  = "system_log.txt"
+FILES          = [LOCAL_FILE,LOCAL_LOGFILE]
+FREE_MIN_BYTES = 100 * 1024  # 100 KB
+RED            = color565(255, 0, 0)
+BLACK          = color565(0, 0, 0)
+GREEN          = color565(0, 255, 0)
+YELLOW         = color565(255, 255, 0)
+WHITE          = color565(255, 255, 255)
+ftp_active = False
+# CYD-Pinout: GPIO 16 = Grün (active-low), GPIO 21 = Backlight
+_led_gruen = Pin(16, Pin.OUT, value=1)   # 1 = aus (active-low)
+_bl        = Pin(21, Pin.OUT, value=0)   # 0 = aus
+# Platzhalter für globale Objekte
+_display = None
+led = None
+def turn_off_and_get_dummy(display_instance, spi_instance):
+    """
+    Schaltet das Backlight aus und gibt das DummyDisplay zurück.
+    Keine Hardware-Zerstörung, kein Löschen von sys.modules.
+    """
+    from dummy_display import DummyDisplay
+
+    print("Schalte um auf Dummy-Display für REPL-Monitor...")
     
-    # 1. Backlight aus
     try:
-        Pin(21, Pin.OUT).off()
+        # 1. Bildschirm schwärzen
+        display_instance.fill_rectangle(0, 0, 320, 240, BLACK)
+        print("Bildschirm schwärzen OK")
     except:
         pass
         
-    # 2. Referenz löschen
-    _display = None
-    
-    # 3. Garbage Collector zwingen, den Framebuffer freizugeben
-    gc.collect()
-def send_redirect(conn, location="/"):
-    header = (
-        "HTTP/1.1 303 See Other\r\n"
-        "Location: {}\r\n"
-        "Connection: close\r\n\r\n"
-    ).format(location)
-    conn.sendall(header.encode())
-# ── WLAN bereits in boot.py verbunden ─────────────────────
-wlan = network.WLAN(network.STA_IF)
-if not wlan.isconnected():
-    print("WLAN nicht verbunden - check boot.py!")
     try:
-        from boot import blink_led, LED_ROT
-        blink_led(LED_ROT, count=5)
+        # 2. Hintergrundbeleuchtung aus (GPIO 21)
+        bl = Pin(21, Pin.OUT)
+        bl.value(0)
+        print("Hintergrundbeleuchtung aus (GPIO 21) OK")
     except:
-        pass
-else:
-    print("IP:", wlan.ifconfig()[0])
-
-# ── Feste Programmliste ────────────────────────────────────
-PROGRAMME = [
-    'calibrate.py',
-    'calibrate_l0.py',
-    'calibrate_l1.py',
-    'calibrate_l2.py',
-    'colorline.py',
-    'ftptrans.py',
-    'hilbert.py',
-    'koch.py',
-    'ls_l.py',
-    'manual_upload.py',
-    'memory.py',
-    'showlog.py',
-    'spirale.py',
-]
-
-# ── Display-Singleton ──────────────────────────────────────
-_display = None
-_backlight = None
-_spi = None
-
-def get_display():
-    global _display, _backlight, _spi
-    if _display is None:
-        from machine import Pin, SPI
-        from ili9341 import Display, color565
-        _spi = SPI(1, baudrate=40000000, sck=Pin(14), mosi=Pin(13))
-        _display = Display(_spi, dc=Pin(2), cs=Pin(15), rst=Pin(15),
-                           width=320, height=240, rotation=0)
-        _backlight = Pin(21, Pin.OUT)
-        _backlight.on()
-    return _display, _spi
-
-# ── QR-Code auf Display zeigen ─────────────────────────────
-def show_ip(ip):
-    from ili9341 import color565
-    import gc
-    DISP_W = 320
-    DISP_H = 240
-    print('show_ip: gc.mem_free()=', gc.mem_free())
-    display, spi = get_display()
-    display.clear(color565(0, 0, 0))
+        print("Hintergrundbeleuchtung aus (GPIO 21) FAIL-Restet")
+        import machine
+        machine.reset()
+        
+    # Wir löschen NUR die lokale Variable des echten Displays,
+    # damit der Speicher vom GC freigegeben wird.
+    del display_instance
     gc.collect()
-    try:
-        import uQR
-        gc.collect()
-        url = 'http://' + str(ip)
-        print('Generiere QR fuer:', url)
-        qr = uQR.QRCode(error_correction=uQR.ERROR_CORRECT_L, border=2)
-        qr.add_data(url)
-        qr.make(fit=True)
-        modules = qr.get_matrix()
-        gc.collect()
-        module_count = len(modules)
-        box_size = max(1, min(7, (DISP_W - 20) // module_count,
-                                  (DISP_H - 20) // module_count))
-        total_size = module_count * box_size
-        start_x = (DISP_W - total_size) // 2
-        start_y = (DISP_H - total_size) // 2
-        print('module_count=%d box_size=%d total=%d sx=%d sy=%d' %
-              (module_count, box_size, total_size, start_x, start_y))
-        white = color565(255, 255, 255)
-        black = color565(0, 0, 0)
-        display.fill_rectangle(start_x - 4, start_y - 4,
-                               total_size + 8, total_size + 8, white)
-        for r in range(module_count):
-                for c in range(module_count):
-                    if modules[r][c]:
-                        display.fill_rectangle(
-                        start_x + c * box_size,
-                        start_y + r * box_size,
-                        box_size, box_size, black)
-        #print('QR-Code fertig, gc.mem_free()=', gc.mem_free())
-        blink(count=1)                
-    except Exception as e:
-        blink(color='red')
-        #logger.log('Fehler in show_ip: '+ str(e))
-        sys.print_exception(e)
-        white = color565(255, 255, 255)
-        black = color565(0, 0, 0)
-        display.draw_text8x8(10, 60, 'QR Fehler:', white, black)
-        display.draw_text8x8(10, 80, str(e)[:28], white, black)
+    
+    # 3. Dummy zurückgeben, damit show_values() brav in die REPL printet
+    print('return DummyDisplay()')
+    return DummyDisplay()
+def show_values(v1, v2, v3, note,  display=None):
+    return #Not needed for now
+    if display is None:
+        display = _display  # Wird beim AUFRUF aufgelöst    
+    display.clear(BLACK)
+    display.draw_text8x8(10, 20,  "Strommonitor "+note,               WHITE,  BLACK)
+    display.draw_text8x8(10, 60,  "L1: {:6.2f} A".format(v1),  GREEN,  BLACK)
+    display.draw_text8x8(10, 100, "L2: {:6.2f} A".format(v2),  GREEN,  BLACK)
+    display.draw_text8x8(10, 140, "L3: {:6.2f} A".format(v3),  GREEN,  BLACK)
+    display.draw_text8x8(10, 190, "Σ:  {:6.2f} A".format(v1+v2+v3), YELLOW, BLACK)
+
+def free_bytes():
+    s = os.statvfs('/')
+    return s[0] * s[3]
+
+def get_timestamp(offset_hours=2):
+    t = time.localtime(time.time() + offset_hours * 3600)
+    return "{:04d}{:02d}{:02d}{:02d}{:02d}{:02d}".format(
+        t[0], t[1], t[2], t[3], t[4], t[5]
+    )
+
+def append_row(i):
+    global last_time_in_seconds, total_kwh
+    
+    ts = get_timestamp()
+    date_str = f"{ts[0:4]}-{ts[4:6]}-{ts[6:8]}"
+    time_str = f"{ts[8:10]}:{ts[10:12]}:{ts[12:14]}"
+    
+    # 1. Uhrzeit in absolute Tagessekunden umrechnen
+    h = int(ts[8:10])
+    m = int(ts[10:12])
+    s = int(ts[12:14])
+    current_seconds = h * 3600 + m * 60 + s
+    
+    # 2. JSON-Check: Falls Variablen im RAM "None/0" sind, versuchen wir aus der Datei zu laden
+    # ("globals()" prüft sauber, ob die Variablen im Skript überhaupt schon existieren)
+    if 'last_time_in_seconds' not in globals() or last_time_in_seconds is None:
+        try:
+            import json
+            with open('energy_state.json', 'r') as f:
+                daten = json.load(f)
+                last_time_in_seconds = daten.get("last_sec", current_seconds)
+                total_kwh = daten.get("kwh", 0.0)
+            print(f"[Energy] Stand geladen: {total_kwh:.4f} kWh")
+        except OSError:
+            # Datei existiert noch nicht -> Initialisierung mit aktuellen Werten
+            last_time_in_seconds = current_seconds
+            total_kwh = 0.0
+            print("[Energy] Keine State-Datei gefunden. Initialisiere neu.")
+
+    v1, v2, v3 = sct_values_get()
     gc.collect()
-
-# ── Programm ausfuehren ────────────────────────────────────
-def programm_starten(dateiname):
-#     # 1. Snapshot der aktuellen Module machen
-#     vorherige_module = set(sys.modules.keys())
+    # 3. kWh-Berechnung (Ergibt beim allerersten Aufruf korrekte 0,0 Leistung, da delta_t = 0)
+    delta_t = (current_seconds - last_time_in_seconds) % 86400
+    if delta_t > 0:
+        power_w = (v1 + v2 + v3) * 240.0
+        total_kwh += (power_w * delta_t) / 3600000.0
+        
+    # Aktuelle Zeit für den nächsten Durchlauf im RAM merken
+    last_time_in_seconds = current_seconds
+    
+    # 4. Aktuellen Zustand im JSON abspeichern (Sicherung für den nächsten Reboot)
     try:
-        modul_name = dateiname.replace('/', '').replace('.py', '')
-        print('[programm_starten] modul_name=', modul_name)
+        import json
+        with open('energy_state.json', 'w') as f:
+            json.dump({"last_sec": last_time_in_seconds, "kwh": total_kwh}, f)
+    except OSError as e:
+        print("[Energy] Fehler beim Sichern des Zustands:", e)
 
-#        if modul_name in sys.modules:
-#            del sys.modules[modul_name]
-#            print('[programm_starten] altes Modul aus sys.modules entfernt')
+    # Rest deiner originalen Funktion
+    note = f"{i} {date_str} {time_str} ({total_kwh:.3f}kWh)"
+    #show_values(v1, v2, v3, note)
+    
+    line = f"{date_str};{time_str};{v1:.3f};{v2:.3f};{v3:.3f};{total_kwh:.4f}\n"
+    with open(LOCAL_FILE, "a") as f:
+        f.write(line.replace(".", ","))
+# In append_row() nach der Messung:
+    with open('last_values.json', 'w') as f:
+        json.dump({'p1': round(v1*240,1), 'p2': round(v2*240,1), 
+                   'p3': round(v3*240,1), 'kwh': total_kwh}, f)        
+    return line.strip()
+def file_size(file=LOCAL_FILE):
+    try:
+        return os.stat(file)[6]
+    except:
+        return 0
+def blink(color='green', count=3, on_ms=200, off_ms=100):
+    import time
+    pin_green = Pin(16, Pin.OUT, value=1)
+    try:
+        pin_red = Pin(4, Pin.OUT, value=1)
+    except:
+        pin_red = None
+    
+    pin = pin_red if color == 'red' and pin_red else pin_green
+    
+    for _ in range(count):
+        pin.value(0)
+        time.sleep_ms(on_ms)
+        pin.value(1)
+        time.sleep_ms(off_ms)
 
-        gc.collect()
-        print('[programm_starten] vor __import__ gc.mem_free()=', gc.mem_free())
-        modul = __import__(modul_name)
-        print('Imported',modul_name)
-        if hasattr(modul, "run"):
-            print('[programm_starten] rufe run() auf')
-            ergebnis = modul.run()
-            print('[programm_starten] run() beendet)', ergebnis)
-            meminfo()
-            return str(ergebnis) if ergebnis is not None else "(kein Rückgabewert)"
+def start_webserver(max_retries=5):
+    import socket, time
+    for attempt in range(max_retries):
+        srv = socket.socket()
+        srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            srv.bind(('0.0.0.0', 80))
+            srv.listen(3)
+            print("Webserver auf Port 80 gestartet (Versuch" , str(attempt+1) , ")")
+            blink('green', 3, 200, 100)
+            return srv
+        except OSError as e:
+            print("Port 80 belegt, Versuch " , str(attempt+1) , "/" , str(max_retries))
+            srv.close()
+            gc.collect()
+            time.sleep(1)
+    
+    print("Konnte Webserver nicht starten")
+    blink('red', 3, 200, 100)
+    return None
+
+import errno
+def handle_web(srv):
+    #return
+    #print('handle_web srv')
+    conn = None
+    try:
+        srv.settimeout(0.02)
+        try:
+            conn, addr = srv.accept()
+            gc.collect()
+            #print('srv.accept()',conn, addr)
+        except OSError as e:
+            if e.args[0] in (11, 110, 111):
+                pass
+            if e.args[0] in (110, 11):
+                print('e.args[0]',e.args[0])
+                return
+            logger(f"[WEB] raise OSError: {e}")
+            raise e
+        
+#         print(f"[WEB] Verbindung von {addr}")
+        conn.settimeout(None)  # ← exakt wie in main.py, das funktioniert
+        req = conn.recv(1024)
+#         print(f"[WEB] recv: {len(req)} Bytes")
+        
+        if not req:
+            blink(color='red')
+            conn.close()
+            gc.collect()
+            return
+        
+        req_str = req.decode('utf-8', 'ignore')
+        pfad = req_str.split(' ')[1] if ' ' in req_str else '/'
+        #logger.log(f"[WEB] Pfad: {pfad}")
+        
+        if pfad in ['/', '/start', '/dashboard']:
+            #logger.log("[WEB] Baue HTML...")
+            blink(count=1)
+            html = html_dashboard()
+            gc.collect()
+            respo = html.encode('utf-8')
+            header = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/html; charset=utf-8\r\n"
+                "Content-Length: {}\r\n"
+                "Connection: close\r\n\r\n"
+            ).format(len(respo)).encode('utf-8')
+            conn.settimeout(10)
+# #             print(f"[WEB] Vor sendall, {len(header)+len(respo)} Bytes", 'conn.settimeout(10)')
+            # In deinem Code, vor und nach sendall:
+#            diagnose_socket(conn, "vor sendall")
+            try:
+                blink(count=1)
+                conn.sendall(header + respo)
+                blink(count=2)
+#                diagnose_socket(conn, "nach sendall")
+#                 print("[WEB] sendall OK")
+            except OSError as e:
+                #logger.log(f"[WEB] sendall FEHLER: {e}")
+                blink(color='red',count=1)
+                
+        elif pfad == '/data':
+            blink(count=1)
+            #logger.log("[WEB] Baue JSON...")
+            try:
+                with open('last_values.json', 'r') as f:
+                    body = f.read()
+            except OSError:
+                body = '{"p1":0,"p2":0,"p3":0,"kwh":0}'
+            body_bytes = body.encode('utf-8')
+            header = (
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Content-Length: {}\r\n"
+                "Connection: close\r\n\r\n"
+            ).format(len(body_bytes)).encode('utf-8')
+#             print(f"[WEB] Vor sendall data, {len(header)+len(body_bytes)} Bytes")
+            try:
+                conn.sendall(header + body_bytes)
+                gc.collect()
+                blitz_backlight()
+                gc.collect()
+#                 print("[WEB] sendall data OK")
+            except OSError as e:
+                #logger.log(f"[WEB] sendall /data FEHLER: {e}")
+                blink(color='red')
+                gc.collect()
+                
         else:
-            msg = "Fehler: Keine run()-Funktion in {} gefunden.".format(dateiname)
-            print('[programm_starten]', msg)
-            return msg
+#             print("[WEB] 404")
+            try:
+                conn.sendall(b'HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+                gc.collect()
+                blink(count=1)
+                gc.collect()
+                blitz_backlight()
+                gc.collect()
+                #print("[WEB] 404 OK")
+            except OSError as e:
+                blink(color='red')
+                gc.collect()
+                #print(f"[WEB] 404 FEHLER: {e}")
+                
+    except OSError as e:
+        if e.args[0] not in (110, 11, 116):
+            logger.log(f"[WEB] Socket-Fehler: {e}")
+            gc.collect()
     except Exception as e:
-        logger.log('[programm_starten] Exception: '+ str(e))
-        sys.print_exception(e)
-        return "Fehler: " + str(e)
-# ── HTML Seite ─────────────────────────────────────────────
-def html_seite(ergebnis=""):
-    ip = wlan.ifconfig()[0]
-    buttons = ""
-    for i in range(0, len(PROGRAMME), 2):
-        buttons += "<div class='row'>"
-        for p in PROGRAMME[i:i+2]:
-            label = p[:-3] if p.endswith('.py') else p
-            buttons += (
-                "<form method='POST' action='/start' class='btnform'>"
-                "<input type='hidden' name='programm' value='" + p + "'>"
-                "<button type='submit'>" + label + "</button>"
-                "</form>")
-        buttons += "</div>"
-
-    # Ergebnis-div: nur anzeigen wenn Text vorhanden
-    ergebnis_html = (
-        "<div id='ergebnis'>" + ergebnis + "</div>"
-        if ergebnis else "<div id='ergebnis' style='display:none'></div>")
-
+        #logger.log(f"[WEB] Unerwarteter Fehler: {e}")
+        blink(color='red', count = 5)
+        gc.collect()
+    finally:
+        if conn:
+#             print("[WEB] Schließe Verbindung")
+            try:
+                conn.close()
+                gc.collect()
+                blink()
+                gc.collect()
+            except Exception as e:
+                #logger.log(f"[WEB] finally close() Fehler: {e}")
+                blink(color='red', count = 4)
+                gc.collect()
+def html_dashboard():
+    import network
+    ip = network.WLAN(network.STA_IF).ifconfig()[0]
     return (
         "<!DOCTYPE html><html>"
         "<head>"
+        "<link rel='icon' href='data:;base64,iVBORw0Kgo='>"
         "<meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<title>ESP32 Launcher</title>"
+        "<title>Strommonitor</title>"
         "<style>"
-        "body{background:#1a1a2e;color:#eee;font-family:sans-serif;"
-        "text-align:center;padding:20px}"
-        "h1{color:#e94560}"
-        ".row{display:flex;justify-content:center;gap:10px;margin:8px 0}"
-        ".btnform{flex:1;max-width:45%}"
-        ".btnform button{width:100%;padding:14px 6px;border-radius:8px;"
-        "font-size:1em;border:none;cursor:pointer;"
-        "background:#27ae60;color:white;transition:background 0.3s}"
-        ".btnform button:active{background:#e67e22}"
-        "#ergebnis{background:#16213e;border-radius:8px;padding:10px;"
-        "margin:14px auto;width:90%;color:#2ecc71;"
-        "word-break:break-word}"
+        "body{background:#1a1a2e;color:#eee;font-family:sans-serif;text-align:center;padding:20px;margin:0}"
+        "h1{color:#e94560;margin-bottom:0.5rem}"
+        ".kwh{font-size:2.5rem;font-weight:bold;color:#2ecc71;line-height:1.1}"
+        ".kwh-unit{font-size:1rem;color:#aaa;margin-left:4px}"
+        ".kwh-label{font-size:0.8rem;color:#aaa;letter-spacing:0.1em;margin-bottom:0.25rem}"
+        ".time{font-size:2.5rem;font-weight:bold;color:#2ecc71;line-height:1.1;margin-left:20px}"
+        ".header-row{display:flex;justify-content:center;align-items:baseline;gap:12px;margin:8px auto;width:90%}" 
+        ".kwh-label{font-size:0.8rem;color:#aaa;letter-spacing:0.1em;margin-bottom:0.25rem;text-align:center}"  
+        ".total{background:#16213e;border-radius:8px;padding:8px;margin:10px auto;width:90%;font-size:0.9rem;color:#aaa}"
+        ".total span{color:#eee;font-weight:bold}"
+        ".bars{display:flex;gap:16px;justify-content:center;align-items:flex-end;margin:16px auto;width:90%;height:400px}"
+        ".bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;height:100%}"
+        ".bar-outer{width:100%;flex:1;background:#16213e;border-radius:6px;display:flex;align-items:flex-end;overflow:hidden;border:1px solid #333;position:relative}"
+        ".bar-inner{width:100%;border-radius:6px 6px 0 0;transition:height 0.6s ease}"
+        ".l1{background:#2980b9}.l2{background:#27ae60}.l3{background:#e67e22}"
+        ".bar-watt{font-size:0.85rem;font-weight:bold;color:#eee}"
+        ".bar-amp{font-size:0.7rem;color:#aaa}"
+        ".bar-name{font-size:0.8rem;color:#aaa}"
+        ".scale{position:absolute;right:3px;top:0;bottom:0;display:flex;flex-direction:column;justify-content:space-between;padding:2px 0;pointer-events:none}"
+        ".scale span{font-size:9px;color:#666;line-height:1}"
+        ".status{font-size:0.75rem;color:#aaa;margin-top:8px}"
+        ".dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#27ae60;margin-right:4px}"
+        ".dot.err{background:#e74c3c}"
         "</style>"
-        "<script>"
-        # Sanduhr auf Button beim Klick – verschwindet wenn neue Seite lädt
-        "document.addEventListener('click',function(e){"
-        "  var b=e.target.closest('button[type=submit]');"
-        "  if(b){"
-        "    b.dataset.label=b.textContent;"
-        "    b.style.background='#e67e22';"
-        "    b.textContent='\u23f3 '+b.dataset.label;"
-        "  }"
-        "});"
-        "</script>"
         "</head>"
         "<body>"
-        "<h1>&#9889; ESP32 Launcher</h1>"
-        + buttons
-        + ergebnis_html +
+        "<h1>&#9889; Strommonitor</h1>"
+        "<div class='kwh-label'>TAGESVERBRAUCH</div>"
+        "<div class='header-row'>"
+        "<span class='time' id='zeit'>--:--:--</span>"
+        "<span class='kwh' id='kwh'>–</span><span class='kwh-unit'>kWh</span>"
+        "</div>"
+        "<div class='total'>Gesamt: <span id='total'>–</span> W &nbsp;|&nbsp; Skala: <span id='scale-lbl'>–</span></div>"
+        "<div class='bars'>"
+        "<div class='bar-col'><div class='bar-watt' id='w1'>– W</div><div class='bar-amp' id='a1'>– A</div>"
+        "<div class='bar-outer'><div class='bar-inner l1' id='b1' style='height:0%'></div>"
+        "<div class='scale' id='sc1'></div></div><div class='bar-name'>L1</div></div>"
+        "<div class='bar-col'><div class='bar-watt' id='w2'>– W</div><div class='bar-amp' id='a2'>– A</div>"
+        "<div class='bar-outer'><div class='bar-inner l2' id='b2' style='height:0%'></div>"
+        "<div class='scale' id='sc2'></div></div><div class='bar-name'>L2</div></div>"
+        "<div class='bar-col'><div class='bar-watt' id='w3'>– W</div><div class='bar-amp' id='a3'>– A</div>"
+        "<div class='bar-outer'><div class='bar-inner l3' id='b3' style='height:0%'></div>"
+        "<div class='scale' id='sc3'></div></div><div class='bar-name'>L3</div></div>"
+        "</div>"
+        "<div class='status'><span class='dot' id='dot'></span><span id='stxt'>Verbinde...</span>"
+        " &nbsp; <span id='upd'></span></div>"
         "<p><small>IP: " + ip + "</small></p>"
+        "<script>"
+        "var SCALES=[500,2000,10000,15000];"
+        "function pickScale(m){for(var i=0;i<SCALES.length;i++)if(m<=SCALES[i])return SCALES[i];return 15000;}"
+        "function update(d){"
+        "var p1=d.p1||0,p2=d.p2||0,p3=d.p3||0,kwh=d.kwh||0;"
+        "var total=p1+p2+p3,max=Math.max(p1,p2,p3,1),scale=pickScale(max);"
+        "document.getElementById('kwh').textContent=kwh.toFixed(2);"
+        "document.getElementById('total').textContent=total.toFixed(1);"
+        "document.getElementById('scale-lbl').textContent=scale+' W';"
+        "document.getElementById('w1').textContent=p1.toFixed(1)+' W';"
+        "document.getElementById('w2').textContent=p2.toFixed(1)+' W';"
+        "document.getElementById('w3').textContent=p3.toFixed(1)+' W';"
+        "document.getElementById('a1').textContent=(p1/240).toFixed(2)+' A';"
+        "document.getElementById('a2').textContent=(p2/240).toFixed(2)+' A';"
+        "document.getElementById('a3').textContent=(p3/240).toFixed(2)+' A';"
+        "document.getElementById('b1').style.height=Math.min(100,(p1/scale)*100).toFixed(1)+'%';"
+        "document.getElementById('b2').style.height=Math.min(100,(p2/scale)*100).toFixed(1)+'%';"
+        "document.getElementById('b3').style.height=Math.min(100,(p3/scale)*100).toFixed(1)+'%';"
+        "document.getElementById('dot').className='dot';"
+        "document.getElementById('stxt').textContent='Live';"
+        "document.getElementById('upd').textContent=new Date().toLocaleTimeString('de-DE');"
+        "var now=new Date();"
+        "document.getElementById('zeit').textContent="
+        "now.getHours().toString().padStart(2,'0')+':'+"
+        "now.getMinutes().toString().padStart(2,'0')+':'+"
+        "now.getSeconds().toString().padStart(2,'0');"
+        "}"
+        "function fetchData(){"
+        "fetch('/data')"
+        ".then(function(r){return r.json();})"
+        ".then(update)"
+        ".catch(function(){"
+        "document.getElementById('dot').className='dot err';"
+        "document.getElementById('stxt').textContent='Keine Verbindung';"
+        "});"
+        "}"
+        "fetchData();setInterval(fetchData,500);"
+        "</script>"
         "</body></html>"
     )
-# ── Request parsen ─────────────────────────────────────────
-def parse_request(req):
-    try:
-        req = req.decode('utf-8')
-        zeilen = req.split('\r\n')
-        methode, pfad, _ = zeilen[0].split(' ')
-        body = req.split('\r\n\r\n')[1] if '\r\n\r\n' in req else ""
-        return methode, pfad, body
-    except:
-        return 'GET', '/', ''
+class SimpleFTP:
+    def __init__(self, host, user, password, port=21):
+        self.host = host
+        self.user = user
+        self.password = password
+        self.port = port
+        self.sock = None
 
-def send_response(conn, html, content_type='text/html; charset=utf-8'):
-    response = html.encode()
-    header = (
-        "HTTP/1.1 200 OK\r\n"
-        "Content-Type: {}\r\n"
-        "Connection: close\r\n"
-        "Content-Length: {}\r\n\r\n"
-    ).format(content_type, len(response))
-    conn.sendall(header.encode() + response)
-
-def parse_body(body):
-    try:
-        for teil in body.split('&'):
-            if '=' in teil:
-                key, val = teil.split('=', 1)
-                if key == 'programm':
-                    return val.replace('+', ' ').replace('%2E', '.')
-    except:
-        pass
-    return None
-def unload_module(name):
-    to_remove = [k for k in sys.modules if k == name or k.startswith(name + '.')]
-    for k in to_remove:
-        del sys.modules[k]
-    gc.collect()
-# start measure immediately
-#import network
-sta_if = network.WLAN(network.STA_IF)
-prog = 'ftptrans'
-gc.collect()
-modul = __import__('ftptrans')
-print('modul.run()',prog)
-print("WLAN-Status:", sta_if.isconnected(), sta_if.ifconfig())
-modul.run()
-logger.log('modul.run() unexpectedly finished')
-logger.log('modul.run() unexpectedly continue')
-# ── Webserver starten ──────────────────────────────────────
-print('start webserver at address', wlan.ifconfig()[0])
-server = socket.socket()
-server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-server.bind(('', 80))
-server.listen(3)
-#print("Webserver: http://{}".format(wlan.ifconfig()[0]))
-#print('Vor show_ip gc.mem_free()=', gc.mem_free())
-show_ip(wlan.ifconfig()[0])
-
-print('Nach show_ip gc.mem_free()=', gc.mem_free())
-gc.collect()
-print('gc.collect() gc.mem_free()=', gc.mem_free())
-
-# ── Hauptschleife ──────────────────────────────────────────
-while True:
-    print('while True:')
-    blink()
-    print('after blink()')
-    conn = None
-    try:
-        print('before conn, addr = server.accept()')
-        conn, addr = server.accept()
-        print('Verbindung von', addr)
-        
-        # WICHTIG: Kurzer Timeout für den Request-Empfang
-                # WICHTIG: Kein starrer Timeout, sondern nicht-blockierend antesten
-        conn.settimeout(0.2) 
+    def cwd(self, path):
+        resp = self._send(f"CWD {path}")
+        #logger.log("FTP: CWD response", resp.strip())
+        blink(count=2)
+        blitz_backlight()
+        return resp
+    def disconnect(self):
         try:
-            req = conn.recv(4096)
-        except OSError:
-            # Timeout beim Warten auf Daten abfangen
-            req = b""
+            self._send("QUIT")
+            blink(count=1)
+        except:
+            blink(color='red',count=1)
+            pass
             
-        if not req:
+        if self.sock:
             try:
-                conn.close()
-                print('not req conn.close()')
-                continue
-            except:
-                print('not req exception conn.close()')
-                pass
-                
-
-        methode, pfad, body = parse_request(req)
-        print('Request:', methode, pfad)
-
-        if "favicon" in pfad:
-            conn.sendall(b"HTTP/1.0 404 Not Found\r\n\r\n")
-            conn.close()
-            continue
-
-        # === POST /start ===
-        if methode == 'POST' and pfad == '/start':
-            prog = parse_body(body)
-            print('Programm:', prog)
-
-            if prog:
-                # Timeout aufheben für längere Operationen
-                conn.settimeout(None)
-                
-                # SONDERFALL: ftptrans
-                if 'ftptrans' in prog:
-                    print("[INFO] Starte ftptrans...")
-                    try:
-                        conn.close()
-                    except:
-                        pass
-                    try:
-                        server.close()
-                    except:
-                        pass
-                    
-                    gc.collect()
-                    modul = __import__('ftptrans')
-                    print('modul.run()',prog)
-                    modul.run()
-                    sys.exit()
-
-                # NORMALER ABLAUF
-                print("[INFO] Starte:", prog)
-                gc.collect()
-                
-                try:
-                    ergebnis = programm_starten(prog)
-                    print('programm_starten',prog,'returned',ergebnis)
-                except Exception as e:
-                    ergebnis = "Fehler in programm_starten: " + str(e)
-                    print("[FEHLER]", ergebnis)
-                
-                # Modul aufräumen
-                modul_name = prog[:-3] if prog.endswith('.py') else prog
-                unload_module(modul_name)
-                gc.collect()
-                
-                # Antwort senden
-                try:
-                    send_response(conn, html_seite(ergebnis=ergebnis))
-                except Exception as e:
-                    print("[WEB] Sendefehler:", e)
-                finally:
-                    try:
-                        conn.close()
-                    except:
-                        pass
-            else:
-                send_response(conn, html_seite())
-                conn.close()
-
-        # === GET / (Hauptseite) ===
-        elif pfad == '/':
-            conn.settimeout(None)
-            t0 = time.ticks_ms()
-            
-            # Ergebnis anzeigen und SOFORT zurücksetzen
-            aktuelles_ergebnis = ergebnis
-            ergebnis = ""  # ← Sofort zurücksetzen!
-            gc.collect()
-            html = html_seite(ergebnis=aktuelles_ergebnis)
-            gc.collect()
-            print('HTML generiert in', time.ticks_diff(time.ticks_ms(), t0), 'ms')
-            
-            try:
-                send_response(conn, html)
+                self.sock.close()
                 blink(count=1)
-                if _display:
-                    release_display()
-                    blink(count=2)
-                gc.collect()
-            except Exception as e:
-                blink(count=1,color='red')
-                print("[WEB] Sendefehler:", e)
-            finally:
-                try:
-                    conn.close()
-                except:
-                    pass
-        # === Alles andere ===
-        else:
-            send_response(conn, html_seite())
-            conn.close()
-
-    except OSError as e:
-        # Timeout oder Socket-Fehler
-        print('# Timeout oder Socket-Fehler',e)
-        if e.args[0] not in (113, 104):
-            print("Echter OS-Fehler:", e)
-        if conn:
-            try:
-                conn.close()
+#                 print("FTP: Control-Socket geschlossen.")
             except:
+                blink(color='red',count=1)
                 pass
+            self.sock = None
+
+    def _send(self, cmd):
+        self.sock.send((cmd + "\r\n").encode())
+        return self._read()
+
+    def _read(self):
+        resp = b""
+        self.sock.settimeout(3)
+        while True:
+            try:
+                chunk = self.sock.recv(512)
+                blitz_backlight(ms=100)
+                if not chunk:
+                    break
+                resp += chunk
+            except:
+                blink(color='red',count=2)
+                break
+        return resp.decode()
+
+    def connect(self):
+        try:
+            self.sock = usocket.socket()
+            self.sock.settimeout(10)  # ← neu
+            addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
+            self.sock.connect(addr)
+            self._read().strip()
+            self._send(f"USER {self.user}").strip()
+            self._send(f"PASS {self.password}").strip()
+            #logger.log('FTP: connected')
+            blink()
+        except Exception as e:
+            blink(color='red')
+            #logger.log('FTP: connect exception',e)
+    def _pasv(self):
+        try:
+            resp = self._send("PASV")
+            #logger.log("FTP: PASV Roh-Antwort vom Server:" , str(resp))
+
+            # Sicherheitscheck: Kam überhaupt eine korrekte Antwort mit Klammern?
+            if not resp or "(" not in resp or ")" not in resp:
+                logger.log("FTP Fehler: Unerwartete PASV Antwort:" , str(resp))
+                blink(color='red')
+                return None
+
+            nums = resp.split("(")[1].split(")")[0].split(",")
+
+            # Sicherheitscheck: Haben wir wirklich alle 6 Zahlen für IP und Port?
+            if len(nums) < 6:
+                logger.log("FTP Fehler: Ungültiges IP/Port Format in PASV:" , str(nums))
+                blink(color='red')
+                return None
+
+            data_ip   = ".".join(nums[:4])
+            data_port = int(nums[4]) * 256 + int(nums[5])
+
+            #logger.log("FTP: Datenverbindung aufbauen zu" + str(data_ip) , ":" , str(data_port))
+
+            data_sock = usocket.socket()
+            # Timeout für den Daten-Socket setzen (sehr wichtig!)
+            data_sock.settimeout(10.0) 
+
+            data_sock.connect(usocket.getaddrinfo(data_ip, data_port)[0][-1])
+            #logger.log("FTP: Daten-Socket erfolgreich verbunden.")
+            blink(count=1)
+            blitz_backlight(ms=100)
+            return data_sock
+
+        except Exception as e:
+            blink(color='red')
+            logger.log("FTP: Schwerer Fehler in _pasv():" , str(e))
+            return None
+    def upload(self, local_path, remote_filename):
+       #logger.log('upload', local_path, remote_filename)
+       time.sleep_ms(200)
+       self._send("TYPE I")
+       time.sleep_ms(200)
+       data_sock = self._pasv()
+       time.sleep_ms(200)
+    
+       # Pre-calculate total chunk count for progress logging
+       file_size = os.stat(local_path)[6]
+       chunk_size = 512
+       total_chunks = (file_size + chunk_size - 1) // chunk_size
+       blink(color='green', count=total_chunks, on_ms=100, off_ms=100)
+       gc.collect()
+       #logger.log(f"FTP: uploading {file_size} bytes in {total_chunks} chunks")
+    
+       self._send(f"STOR {remote_filename}")
+       gc.collect()
+    
+       chunk_index = 0
+       bytes_sent = 0
+       last_logged_bytes = 0
+       log_interval = 50 * 1024  # log every 50 KB
+    
+       with open(local_path, "rb") as f:
+           while True:
+               chunk = f.read(chunk_size)
+               if not chunk:
+                   break
+               data_sock.send(chunk)
+               gc.collect()
+               chunk_index += 1
+               bytes_sent += len(chunk)
+    
+               if bytes_sent - last_logged_bytes >= log_interval:
+                   #logger.log(f"FTP: chunk {chunk_index} of {total_chunks}")
+                   blitz_backlight()
+                   last_logged_bytes = bytes_sent
+    
+       logger.log(f"FTP: uploaded all {total_chunks} chunks")
+       gc.collect()
+    
+       data_sock.close()
+       gc.collect()
+       r = self._read()
+       return r.startswith("226")
+
+def upload_and_clear(reason, localfile=LOCAL_FILE):
+    # 1. Sofort alten Müll (vom vorherigen FTP-Lauf) löschen, BEVOR wir irgendwas tun!
+    import gc
+    gc.collect()
+
+    # 0. Check if the local file even exists before doing anything else
+    try:
+        file_size = os.stat(localfile)[6]
+        blink()
+    except OSError:
+        logger.log("Upload skipped: file does not exist", localfile)
+        blink(color='red', count=1, on_ms=200, off_ms=100)
+        return
+    #logger.log("Upload", localfile, file_size, "bytes")
+    _, _, FTP_USER, FTP_PASS = get_credentials()
+    # 2. Erst jetzt, im frisch aufgeräumten RAM, den Zeitstempel generieren
+    ts = get_timestamp()
+    remote_name = f"{ts}_{localfile}"
+    
+#     print(f"\n>>> Trigger: {reason}")
+    #logger.log(f"    Upload als '{remote_name}' | Dateigröße: {file_size()} B | Frei: {free_bytes()} B")
+    # Sicherheitshalber auch hier aufräumen
+    gc.collect()
+    try:
+        ntptime.settime()
+    except Exception as e:
+        print('ntptime.settime() exception',e)
+        blink(color='red', count=2, on_ms=200, off_ms=100)
+        gc.collect()
+        pass # Falls NTP mal zickt, nicht abstürzen
+
+    # FTP ausführen
+    success = False
+    try:
+        ftp = SimpleFTP(FTP_HOST, FTP_USER, FTP_PASS)
+        gc.collect()
+#         print('ftp initialized, do connect')
+        for attempt in range(3):
+            try:
+                ftp.connect()
+                gc.collect()
+                #logger.log('break')
+                blink()
+                gc.collect()
+                break
+            except OSError as e:
+                print(f"FTP connect attempt {attempt+1} failed:", e)
+                gc.collect()
+                time.sleep(2)
+                gc.collect()
+        else:
+            print('ftp.connect() tried 3 times without success')
+            gc.collect()
+            blink(color='red', count=3, on_ms=200, off_ms=100)
+            gc.collect()
+#         print('ftp connected')
+        #logger.log('next ftp.cwd(FTP_DIR)',FTP_DIR)
+        ftp.cwd(FTP_DIR)
+        gc.collect()
+        blink()
+        gc.collect()
+        #logger.log('upload',localfile, 'to',remote_name)
+        success = ftp.upload(localfile, remote_name)
+        gc.collect()
+        ftp.disconnect()
         gc.collect()
         
+        # Wichtig: Das Objekt explizit zerstören, damit der RAM freigegeben werden kann
+        del ftp
+        #print('del ftp OK')
+        blink()
+        gc.collect()
+        blitz_backlight()
+        gc.collect()
     except Exception as e:
-        print("Serverfehler:", e)
-        sys.print_exception(e)
-        if conn:
-            try:
-                conn.close()
-            except:
-                pass
+        logger.log("    FTP-Fehler während der Übertragung:", e)
+        gc.collect()
+        blink(color='red')
+        gc.collect()
+        pass
+
+    if success:
+        try:
+            os.remove(localfile)
+            gc.collect()
+#             print(f"{localfile} lokal gelöscht. Frei nachher: {free_bytes()} B")
+        except:
+            print('exception in os.remove(localfile)',localfile)
+            gc.collect()
+            blink(color='red')
+            gc.collect()
+            pass
+    else:
+         blink(color='red')
+         gc.collect()
+         blitz_backlightr()
+         gc.collect()
+         blink(color='red')
+         gc.collect()
+
+    # Nach dem FTP-Lauf sofort wieder saubermachen für die nächsten Messungen
     gc.collect()
-    print('end while')
+    return success
+def blitz_backlight(ms=500):
+    """Display-Backlight für ms Millisekunden voll einschalten.
+    Hinweis: Überschreibt ggf. eine vorhandene PWM-Steuerung auf GPIO21."""
+    _bl.value(1)
+    time.sleep_ms(ms)
+    _bl.value(0)
+def run():
+    # Herausfinden, wer gestartet hat, via Namensraum
+    gc.collect()
+    print('gc.mem_free()',gc.mem_free())
+    caller = "direkt/main" if __name__ == "__main__" else "programm_starten"
+    #logger.log('ftptrans caller:', caller)
+    global _display, led
+    led = LED()
+   
+    # Pins manuell freigeben, um den SPI-Host zu "entfesseln"
+    try:
+        Pin(14, Pin.IN)
+        Pin(13, Pin.IN)
+    except Exception:
+        pass
+    
+    # Echte Hardware initialisieren
+    _spi = SPI(1, baudrate=40000000, sck=Pin(14), mosi=Pin(13))
+    _display = Display(_spi, dc=Pin(2), cs=Pin(15), rst=Pin(15),
+                       width=320, height=240, rotation=0)
+    Pin(21, Pin.OUT).on()
+    
+    import utime
+    utime.sleep(2)  # Socket-Cleanup abwarten
+    NTP_SERVERS = ["fritz.box", "192.168.178.1", "192.168.178.11",'192.168.178.31','192.168.178.88']  # deine IPs
+
+    ntp_ok = False
+    for i in range(3):
+        for host in NTP_SERVERS:
+            try:
+                _display.draw_text8x8(10, 20, host, WHITE, BLACK)
+                gc.collect()
+                ntptime.host = host
+                ntptime.settime()
+                _display.draw_text8x8(10, 40, "ntptime OK", GREEN, BLACK)
+                gc.collect()
+                print('ntptime.settime() success, host=' , host)
+                ntp_ok = True
+                blink()
+                gc.collect()
+                break
+            except Exception as e:
+                print("NTP Fehler mit",host, str(e))
+                blink(color='red')
+                gc.collect()
+                gc.collect()
+                print('memory',gc.mem_free())
+            continue
+        if ntp_ok:
+            break
+    if not ntp_ok:
+        _display.draw_text8x8(10, 40, "NTP skip", RED, BLACK)
+        logger.log("NTP completely failed, no use to continue")
+        import machine
+        machine.soft_reset()
+    t = time.localtime()
+    last_day = t[2]
+    _display.draw_text8x8(10, 60, "init OK   ", GREEN, BLACK)
+    
+    # Zugriff auf wlan-Objekt abfangen (falls es global in main.py existiert)
+    # Wenn nicht verfügbar, erstellen wir ein Dummy-Objekt, um Abstürze zu verhindern
+    # Echte WLAN-Schnittstelle direkt vom System holen (unabhängig von Namensräumen)
+    import network
+    wlan = network.WLAN(network.STA_IF)
+    if not wlan:
+        print('not wlan')
+        import machine
+        machine.soft_reset()
+    #logger.log('before switching off display wlan.isconnected()', str(wlan.isconnected()))
+    gc.collect()
+#     print('free memory:', gc.mem_free())
+#     print('free memory:', str(gc.mem_free()))
+    t = time.localtime(time.time() + 2 * 3600)
+    last_day = t[2]
+    last_date_str = "{:04d}{:02d}{:02d}".format(t[0], t[1], t[2])
+    gc.collect()
+#     print(f"Flash total: {os.statvfs('/')[0] * os.statvfs('/')[2] // 1024} KB")
+#     print(f"Flash frei:  {free_bytes() // 1024} KB")
+    
+    # Jetzt auf DummyDisplay umschalten
+#     print('_display = turn_off_and_get_dummy(_display, _spi)')
+    _display = turn_off_and_get_dummy(_display, _spi)
+    gc.collect()
+    
+    i = 0
+    ftp_active = False 
+    load_calibration()
+    time.sleep(5)
+    srv = start_webserver()
+    if not srv:
+        return "Webserver not established"
+    save_interval = 3
+    interval_save = False #True #  
+    # --- Hauptschleife ---
+    while True:
+        gc.collect()
+        if not ftp_active:  # Nur Webserver bedienen, wenn kein FTP läuft
+             handle_web(srv)  # Non-blocking, kehrt sofort zurück
+        t = time.localtime(time.time() + 2 * 3600)
+        gc.collect()
+        today = t[2]
+        try:
+            row = append_row(i)
+            gc.collect()
+            i += 1
+            time.sleep(2)
+            blink()
+            gc.collect()
+            blitz_backlight()
+            gc.collect()
+        except OSError as e:
+            try:
+                load_calibration()
+                gc.collect()
+            except Exception as reset_err:
+                logger.log("-> Reinitialisierung fehlgeschlagen:", reset_err)
+                gc.collect()
+                pass
+            time.sleep(2)
+            continue
+            
+        frei = free_bytes()
+        if frei < FREE_MIN_BYTES:
+            ftp_active = True
+            for file in FILES:
+                upload_and_clear("Speicher < 100 KB", file)
+                gc.collect()
+            ftp_active = False
+            last_day = time.localtime()[2]
+            last_date_str = "{:04d}{:02d}{:02d}".format(*time.localtime()[:3])
+            gc.collect()
+        elif today != last_day:
+            ftp_active = True
+            for file in FILES:
+                upload_and_clear(f"Tageswechsel {last_date_str} → {'{:04d}{:02d}{:02d}'.format(*t[:3])}", file)
+                gc.collect()
+            last_day = today
+            last_date_str = "{:04d}{:02d}{:02d}".format(*t[:3])
+            
+        elif i % save_interval == 0 and interval_save:
+            reason = f"i % save_interval == 0 {last_date_str} → {'{:04d}{:02d}{:02d}'.format(*t[:3])}"
+#             print(reason,':',reason)
+            ftp_active = True
+            for file in FILES:
+                upload_and_clear(reason, file)
+                gc.collect()
+        ftp_active = False    
+        time.sleep(0.1)  # 100ms Pause
+    # Einzeltest aus Thonny erlauben
+if __name__ == "__main__":
+    run()
+
+# def meminfo():
+#     import micropython
+#     import gc
+# # 1. Sammle zuerst den Müll
+#     gc.collect()
+# # 2. Zeige die detaillierte Speicherübersicht
+#     micropython.mem_info(1)    
+# def release_display():
+#     global _display # Falls dein Display global definiert ist
+#     print("Geben Display-Ressourcen frei...")
+#     
+#     # 1. Backlight aus
+#     try:
+#         Pin(21, Pin.OUT).off()
+#     except:
+#         pass
+#         
+#     # 2. Referenz löschen
+#     _display = None
+#     
+#     # 3. Garbage Collector zwingen, den Framebuffer freizugeben
+#     gc.collect()
+# def send_redirect(conn, location="/"):
+#     header = (
+#         "HTTP/1.1 303 See Other\r\n"
+#         "Location: {}\r\n"
+#         "Connection: close\r\n\r\n"
+#     ).format(location)
+#     conn.sendall(header.encode())
+# # ── WLAN bereits in boot.py verbunden ─────────────────────
+# wlan = network.WLAN(network.STA_IF)
+# if not wlan.isconnected():
+#     print("WLAN nicht verbunden - check boot.py!")
+#     try:
+#         from boot import blink_led, LED_ROT
+#         blink_led(LED_ROT, count=5)
+#     except:
+#         pass
+# else:
+#     print("IP:", wlan.ifconfig()[0])
+# 
+# # ── Feste Programmliste ────────────────────────────────────
+# PROGRAMME = [
+#     'calibrate.py',
+#     'calibrate_l0.py',
+#     'calibrate_l1.py',
+#     'calibrate_l2.py',
+#     'colorline.py',
+#     'ftptrans.py',
+#     'hilbert.py',
+#     'koch.py',
+#     'ls_l.py',
+#     'manual_upload.py',
+#     'memory.py',
+#     'showlog.py',
+#     'spirale.py',
+# ]
+# 
+# # ── Display-Singleton ──────────────────────────────────────
+# _display = None
+# _backlight = None
+# _spi = None
+# 
+# def get_display():
+#     global _display, _backlight, _spi
+#     print('in def get_display():')
+#     if _display is None:
+#         from machine import Pin, SPI
+#         from ili9341 import Display, color565
+#         _spi = SPI(1, baudrate=40000000, sck=Pin(14), mosi=Pin(13))
+#         _display = Display(_spi, dc=Pin(2), cs=Pin(15), rst=Pin(15),
+#                            width=320, height=240, rotation=0)
+#         _backlight = Pin(21, Pin.OUT)
+#         _backlight.on()
+#     return _display, _spi
+# 
+# # ── QR-Code auf Display zeigen ─────────────────────────────
+# def show_ip(ip):
+#     from ili9341 import color565
+#     import gc
+#     DISP_W = 320
+#     DISP_H = 240
+#     print('show_ip: gc.mem_free()=', gc.mem_free())
+#     display, spi = get_display()
+#     display.clear(color565(0, 0, 0))
+#     gc.collect()
+#     try:
+#         import uQR
+#         gc.collect()
+#         url = 'http://' + str(ip)
+#         print('Generiere QR fuer:', url)
+#         qr = uQR.QRCode(error_correction=uQR.ERROR_CORRECT_L, border=2)
+#         qr.add_data(url)
+#         qr.make(fit=True)
+#         modules = qr.get_matrix()
+#         gc.collect()
+#         module_count = len(modules)
+#         box_size = max(1, min(7, (DISP_W - 20) // module_count,
+#                                   (DISP_H - 20) // module_count))
+#         total_size = module_count * box_size
+#         start_x = (DISP_W - total_size) // 2
+#         start_y = (DISP_H - total_size) // 2
+#         print('module_count=%d box_size=%d total=%d sx=%d sy=%d' %
+#               (module_count, box_size, total_size, start_x, start_y))
+#         white = color565(255, 255, 255)
+#         black = color565(0, 0, 0)
+#         display.fill_rectangle(start_x - 4, start_y - 4,
+#                                total_size + 8, total_size + 8, white)
+#         for r in range(module_count):
+#                 for c in range(module_count):
+#                     if modules[r][c]:
+#                         display.fill_rectangle(
+#                         start_x + c * box_size,
+#                         start_y + r * box_size,
+#                         box_size, box_size, black)
+#         #print('QR-Code fertig, gc.mem_free()=', gc.mem_free())
+#         blink(count=1)                
+#     except Exception as e:
+#         blink(color='red')
+#         #logger.log('Fehler in show_ip: '+ str(e))
+#         sys.print_exception(e)
+#         white = color565(255, 255, 255)
+#         black = color565(0, 0, 0)
+#         display.draw_text8x8(10, 60, 'QR Fehler:', white, black)
+#         display.draw_text8x8(10, 80, str(e)[:28], white, black)
+#     gc.collect()
+# 
+# # ── Programm ausfuehren ────────────────────────────────────
+# def programm_starten(dateiname):
+# #     # 1. Snapshot der aktuellen Module machen
+# #     vorherige_module = set(sys.modules.keys())
+#     try:
+#         modul_name = dateiname.replace('/', '').replace('.py', '')
+#         print('[programm_starten] modul_name=', modul_name)
+# 
+# #        if modul_name in sys.modules:
+# #            del sys.modules[modul_name]
+# #            print('[programm_starten] altes Modul aus sys.modules entfernt')
+# 
+#         gc.collect()
+#         print('[programm_starten] vor __import__ gc.mem_free()=', gc.mem_free())
+#         modul = __import__(modul_name)
+#         print('Imported',modul_name)
+#         if hasattr(modul, "run"):
+#             print('[programm_starten] rufe run() auf')
+#             ergebnis = modul.run()
+#             print('[programm_starten] run() beendet)', ergebnis)
+#             meminfo()
+#             return str(ergebnis) if ergebnis is not None else "(kein Rückgabewert)"
+#         else:
+#             msg = "Fehler: Keine run()-Funktion in {} gefunden.".format(dateiname)
+#             print('[programm_starten]', msg)
+#             return msg
+#     except Exception as e:
+#         logger.log('[programm_starten] Exception: '+ str(e))
+#         sys.print_exception(e)
+#         return "Fehler: " + str(e)
+# # ── HTML Seite ─────────────────────────────────────────────
+# def html_seite(ergebnis=""):
+#     ip = wlan.ifconfig()[0]
+#     buttons = ""
+#     for i in range(0, len(PROGRAMME), 2):
+#         buttons += "<div class='row'>"
+#         for p in PROGRAMME[i:i+2]:
+#             label = p[:-3] if p.endswith('.py') else p
+#             buttons += (
+#                 "<form method='POST' action='/start' class='btnform'>"
+#                 "<input type='hidden' name='programm' value='" + p + "'>"
+#                 "<button type='submit'>" + label + "</button>"
+#                 "</form>")
+#         buttons += "</div>"
+# 
+#     # Ergebnis-div: nur anzeigen wenn Text vorhanden
+#     ergebnis_html = (
+#         "<div id='ergebnis'>" + ergebnis + "</div>"
+#         if ergebnis else "<div id='ergebnis' style='display:none'></div>")
+# 
+#     return (
+#         "<!DOCTYPE html><html>"
+#         "<head>"
+#         "<meta charset='utf-8'>"
+#         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+#         "<title>ESP32 Launcher</title>"
+#         "<style>"
+#         "body{background:#1a1a2e;color:#eee;font-family:sans-serif;"
+#         "text-align:center;padding:20px}"
+#         "h1{color:#e94560}"
+#         ".row{display:flex;justify-content:center;gap:10px;margin:8px 0}"
+#         ".btnform{flex:1;max-width:45%}"
+#         ".btnform button{width:100%;padding:14px 6px;border-radius:8px;"
+#         "font-size:1em;border:none;cursor:pointer;"
+#         "background:#27ae60;color:white;transition:background 0.3s}"
+#         ".btnform button:active{background:#e67e22}"
+#         "#ergebnis{background:#16213e;border-radius:8px;padding:10px;"
+#         "margin:14px auto;width:90%;color:#2ecc71;"
+#         "word-break:break-word}"
+#         "</style>"
+#         "<script>"
+#         # Sanduhr auf Button beim Klick – verschwindet wenn neue Seite lädt
+#         "document.addEventListener('click',function(e){"
+#         "  var b=e.target.closest('button[type=submit]');"
+#         "  if(b){"
+#         "    b.dataset.label=b.textContent;"
+#         "    b.style.background='#e67e22';"
+#         "    b.textContent='\u23f3 '+b.dataset.label;"
+#         "  }"
+#         "});"
+#         "</script>"
+#         "</head>"
+#         "<body>"
+#         "<h1>&#9889; ESP32 Launcher</h1>"
+#         + buttons
+#         + ergebnis_html +
+#         "<p><small>IP: " + ip + "</small></p>"
+#         "</body></html>"
+#     )
+# # ── Request parsen ─────────────────────────────────────────
+# def parse_request(req):
+#     try:
+#         req = req.decode('utf-8')
+#         zeilen = req.split('\r\n')
+#         methode, pfad, _ = zeilen[0].split(' ')
+#         body = req.split('\r\n\r\n')[1] if '\r\n\r\n' in req else ""
+#         return methode, pfad, body
+#     except:
+#         return 'GET', '/', ''
+# 
+# def send_response(conn, html, content_type='text/html; charset=utf-8'):
+#     response = html.encode()
+#     header = (
+#         "HTTP/1.1 200 OK\r\n"
+#         "Content-Type: {}\r\n"
+#         "Connection: close\r\n"
+#         "Content-Length: {}\r\n\r\n"
+#     ).format(content_type, len(response))
+#     conn.sendall(header.encode() + response)
+# 
+# def parse_body(body):
+#     try:
+#         for teil in body.split('&'):
+#             if '=' in teil:
+#                 key, val = teil.split('=', 1)
+#                 if key == 'programm':
+#                     return val.replace('+', ' ').replace('%2E', '.')
+#     except:
+#         pass
+#     return None
+# def unload_module(name):
+#     to_remove = [k for k in sys.modules if k == name or k.startswith(name + '.')]
+#     for k in to_remove:
+#         del sys.modules[k]
+#     gc.collect()
+# # start main
+# import gc
+# import sys
+# import os
+# import network, socket, os, time
+# print('Vor import network, socket, os, time  gc.mem_free()=', gc.mem_free())
+# from display_utils import turn_off_and_get_dummy
+# print('nach import network, socket, os, time  gc.mem_free()=', gc.mem_free())
+# from logger import logger
+# from ftptrans import blink, blitz_backlight
+# print('running main with memory free',gc.mem_free())
+# ergebnis = ""
+# server = socket.socket()
+# server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+# server.bind(('', 80))
+# server.listen(3)
+# print("Webserver: http://{}".format(wlan.ifconfig()[0]))
+# print('Vor show_ip gc.mem_free()=', gc.mem_free(), wlan.ifconfig()[0])
+# #show_ip(wlan.ifconfig()[0])
+# print('Nach show_ip gc.mem_free()=', gc.mem_free())
+# gc.collect()
+# print('gc.collect() gc.mem_free()=', gc.mem_free())
+# server.settimeout(5.0)  # <-- Timeout verhindert ewigen Block
+# 
+# # ── Hauptschleife ──────────────────────────────────────────
+# while True:
+#     print('while True:')
+#     blink()
+#     logger.log('after blink()')
+#     gc.collect()
+#     conn = None
+#     try:
+#         print('before conn, addr = server.accept()')
+#         conn, addr = server.accept()
+#         print('Verbindung von', addr)
+#         
+#         # WICHTIG: Kurzer Timeout für den Request-Empfang
+#                 # WICHTIG: Kein starrer Timeout, sondern nicht-blockierend antesten
+#         conn.settimeout(0.2) 
+#         try:
+#             req = conn.recv(4096)
+#         except OSError:
+#             # Timeout beim Warten auf Daten abfangen
+#             req = b""
+#             
+#         if not req:
+#             try:
+#                 conn.close()
+#                 print('not req conn.close()')
+#                 continue
+#             except:
+#                 print('not req exception conn.close()')
+#                 pass
+#                 
+# 
+#         methode, pfad, body = parse_request(req)
+#         print('Request:', methode, pfad)
+# 
+#         if "favicon" in pfad:
+#             conn.sendall(b"HTTP/1.0 404 Not Found\r\n\r\n")
+#             conn.close()
+#             continue
+# 
+#         # === POST /start ===
+#         if methode == 'POST' and pfad == '/start':
+#             prog = parse_body(body)
+#             print('Programm:', prog)
+# 
+#             if prog:
+#                 # Timeout aufheben für längere Operationen
+#                 conn.settimeout(None)
+#                 
+#                 # SONDERFALL: ftptrans
+#                 if 'ftptrans' in prog:
+#                     print("[INFO] Starte ftptrans...")
+#                     try:
+#                         conn.close()
+#                     except:
+#                         pass
+#                     try:
+#                         server.close()
+#                     except:
+#                         pass
+#                     
+#                     gc.collect()
+#                     modul = __import__('ftptrans')
+#                     print('modul.run()',prog)
+#                     modul.run()
+#                     sys.exit()
+# 
+#                 # NORMALER ABLAUF
+#                 print("[INFO] Starte:", prog)
+#                 gc.collect()
+#                 
+#                 try:
+#                     ergebnis = programm_starten(prog)
+#                     print('programm_starten',prog,'returned',ergebnis)
+#                 except Exception as e:
+#                     ergebnis = "Fehler in programm_starten: " + str(e)
+#                     print("[FEHLER]", ergebnis)
+#                 
+#                 # Modul aufräumen
+#                 modul_name = prog[:-3] if prog.endswith('.py') else prog
+#                 unload_module(modul_name)
+#                 gc.collect()
+#                 
+#                 # Antwort senden
+#                 try:
+#                     send_response(conn, html_seite(ergebnis=ergebnis))
+#                 except Exception as e:
+#                     print("[WEB] Sendefehler:", e)
+#                 finally:
+#                     try:
+#                         conn.close()
+#                     except:
+#                         pass
+#             else:
+#                 send_response(conn, html_seite())
+#                 conn.close()
+# 
+#         # === GET / (Hauptseite) ===
+#         elif pfad == '/':
+#             conn.settimeout(None)
+#             t0 = time.ticks_ms()
+#             
+#             # Ergebnis anzeigen und SOFORT zurücksetzen
+#             aktuelles_ergebnis = ergebnis
+#             ergebnis = ""  # ← Sofort zurücksetzen!
+#             gc.collect()
+#             html = html_seite(ergebnis=aktuelles_ergebnis)
+#             gc.collect()
+#             print('HTML generiert in', time.ticks_diff(time.ticks_ms(), t0), 'ms')
+#             
+#             try:
+#                 send_response(conn, html)
+#                 blink(count=1)
+#                 if _display:
+#                     release_display()
+#                     blink(count=2)
+#                 gc.collect()
+#             except Exception as e:
+#                 blink(count=1,color='red')
+#                 print("[WEB] Sendefehler:", e)
+#             finally:
+#                 try:
+#                     conn.close()
+#                 except:
+#                     pass
+#         # === Alles andere ===
+#         else:
+#             send_response(conn, html_seite())
+#             conn.close()
+# 
+#     except OSError as e:
+#         # Timeout oder Socket-Fehler
+#         print('# Timeout oder Socket-Fehler',e)
+#         if e.args[0] not in (113, 104):
+#             print("Echter OS-Fehler:", e)
+#         if conn:
+#             try:
+#                 conn.close()
+#             except:
+#                 pass
+#         gc.collect()
+#         
+#     except Exception as e:
+#         print("Serverfehler:", e)
+#         sys.print_exception(e)
+#         if conn:
+#             try:
+#                 conn.close()
+#             except:
+#                 pass
+#     gc.collect()
+#     print('end while')

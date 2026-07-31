@@ -39,6 +39,9 @@ led_off(LED_BLAU)
 # ── WLAN-Verbindung versuchen ──────────────────────────────────
 print("boot.py → WLAN initialisieren")
 wlan = network.WLAN(network.STA_IF)
+# wlan zurücksetzen
+wlan.active(False)
+time.sleep_ms(200)
 wlan.active(True)
 ssid, password, _, _ = get_credentials('/credentials.txt')
 print('ssid, password = ',ssid, password)
@@ -61,7 +64,7 @@ if ssid and password:
     
     if wlan.isconnected():
         log("WLAN verbunden → IP: "+ str(wlan.ifconfig()[0]))
-        blink_led(LED_GRUEN, count=3, on_ms=800, off_ms=800)   # Erfolg
+        blink_led(LED_GRUEN, count=1, on_ms=800, off_ms=800)   # Erfolg
         connected = True
         wlan = network.WLAN(network.STA_IF)
         wlan.config(dhcp_hostname='esp32')

@@ -24,6 +24,9 @@ def run_boot():
 
     print("boot.py → WLAN initialisieren")
     wlan = network.WLAN(network.STA_IF)
+    # Alten Zustand aus vorherigem Soft-Reset komplett abreißen
+    wlan.active(False)
+    time.sleep_ms(200)
     wlan.active(True)
     
     # Tupel-Entpacken optimieren (Vermeidung von Dummy-Variablen)
@@ -52,7 +55,7 @@ def run_boot():
             
     if wlan.isconnected():
         # NTP-Logik direkt hier einbetten (spart Funktions-Overhead)
-        wlan.config(pm=network.WLAN.PM_NONE)  # disable WiFi power-save (modem sleep)
+        #wlan.config(pm=network.WLAN.PM_NONE)  # disable WiFi power-save (modem sleep)
         import ntptime
         ntptime.host = "fritz.box"
         time.sleep(1) 
@@ -64,13 +67,15 @@ def run_boot():
             
         #logger.log("WLAN verbunden → IP: %s" % wlan.ifconfig()[0])
         wlan.config(dhcp_hostname='esp32')
-        blink(led_gruen, 3, 800, 800)
+        blink(led_gruen, 1, 800, 800)
     else:
         logger.log("WLAN-Verbindung fehlgeschlagen!")
         blink(led_rot, 5, 200, 200)
         led_rot.off()
 
 # 1. Boot-Logik in geschütztem Namensraum ausführen
+from machine import Pin
+Pin(21, Pin.OUT).value(0)  # Backlight-Pin bei der CYD, ggf. anpassen (oft GPIO21 oder GPIO27)
 run_boot()
 
 # # 2. Die Funktion und nicht mehr benötigte Imports rigoros aus dem RAM löschen
