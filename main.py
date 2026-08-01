@@ -420,7 +420,7 @@ class SimpleFTP:
 
     def cwd(self, path):
         resp = self._send(f"CWD {path}")
-        #logger.log("FTP: CWD response", resp.strip())
+        logger.log("FTP: CWD response", path, resp.strip())
         blink(count=2)
         blitz_backlight()
         return resp
@@ -452,7 +452,7 @@ class SimpleFTP:
         while True:
             try:
                 chunk = self.sock.recv(512)
-                blitz_backlight(ms=100)
+#                blitz_backlight(ms=100)
                 if not chunk:
                     break
                 resp += chunk
@@ -506,7 +506,7 @@ class SimpleFTP:
             data_sock.connect(usocket.getaddrinfo(data_ip, data_port)[0][-1])
             #logger.log("FTP: Daten-Socket erfolgreich verbunden.")
             blink(count=1)
-            blitz_backlight(ms=100)
+            #blitz_backlight(ms=100)
             return data_sock
 
         except Exception as e:
@@ -525,7 +525,8 @@ class SimpleFTP:
        file_size = os.stat(local_path)[6]
        chunk_size = 512
        total_chunks = (file_size + chunk_size - 1) // chunk_size
-       blink(color='green', count=total_chunks, on_ms=100, off_ms=100)
+       blink(color='green', count=3, on_ms=100, off_ms=100)
+       blitz_backlight()
        gc.collect()
        #logger.log(f"FTP: uploading {file_size} bytes in {total_chunks} chunks")
     
@@ -545,6 +546,8 @@ class SimpleFTP:
                data_sock.send(chunk)
                gc.collect()
                chunk_index += 1
+               if chunk_index % 20 == 0:
+                   blitz_backlight()
                bytes_sent += len(chunk)
     
                if bytes_sent - last_logged_bytes >= log_interval:
@@ -655,7 +658,7 @@ def upload_and_clear(reason, localfile=LOCAL_FILE):
     else:
          blink(color='red')
          gc.collect()
-         blitz_backlightr()
+         blitz_backlight()
          gc.collect()
          blink(color='red')
          gc.collect()
