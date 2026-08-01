@@ -663,13 +663,17 @@ def upload_and_clear(reason, localfile=LOCAL_FILE):
     # Nach dem FTP-Lauf sofort wieder saubermachen für die nächsten Messungen
     gc.collect()
     return success
-def blitz_backlight(ms=500):
+def blitz_backlight(ms=1000):
     """Display-Backlight für ms Millisekunden voll einschalten.
     Hinweis: Überschreibt ggf. eine vorhandene PWM-Steuerung auf GPIO21."""
     _bl.value(1)
     time.sleep_ms(ms)
     _bl.value(0)
 def run():
+    from manual_upload import manual_transfer
+    print('ftp transfer')
+    manual_transfer()
+    print('ftp transfer done')
     # Herausfinden, wer gestartet hat, via Namensraum
     gc.collect()
     print('gc.mem_free()',gc.mem_free())

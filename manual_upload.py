@@ -1,6 +1,6 @@
 from ftptrans import upload_and_clear
 from logger import logger
-def run():
+def manual_transfer():
     try:
         for f in ['messwerte.csv','system_log.txt']:
             result = upload_and_clear('manual ftp upload',f)
@@ -11,5 +11,5 @@ def run():
         return 'Upload Fail '+f
     # Einzeltest aus Thonny erlauben
 if __name__ == "__main__":
-    run()
+    manual_transfer()
     
