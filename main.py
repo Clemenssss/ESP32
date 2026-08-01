@@ -32,6 +32,12 @@ _bl        = Pin(21, Pin.OUT, value=0)   # 0 = aus
 # Platzhalter für globale Objekte
 _display = None
 led = None
+def blitz_backlight(ms=1000):
+    """Display-Backlight für ms Millisekunden voll einschalten.
+    Hinweis: Überschreibt ggf. eine vorhandene PWM-Steuerung auf GPIO21."""
+    _bl.value(1)
+    time.sleep_ms(ms)
+    _bl.value(0)
 def turn_off_and_get_dummy(display_instance, spi_instance):
     """
     Schaltet das Backlight aus und gibt das DummyDisplay zurück.
@@ -269,7 +275,7 @@ def handle_web(srv):
             try:
                 conn.sendall(header + body_bytes)
                 gc.collect()
-                blitz_backlight()
+                blitz_backlight(ms=1000)
                 gc.collect()
 #                 print("[WEB] sendall data OK")
             except OSError as e:
@@ -284,7 +290,7 @@ def handle_web(srv):
                 gc.collect()
                 blink(count=1)
                 gc.collect()
-                blitz_backlight()
+                blitz_backlight(ms=1000)
                 gc.collect()
                 #print("[WEB] 404 OK")
             except OSError as e:
@@ -422,7 +428,7 @@ class SimpleFTP:
         resp = self._send(f"CWD {path}")
         logger.log("FTP: CWD response", path, resp.strip())
         blink(count=2)
-        blitz_backlight()
+        blitz_backlight(ms=1000)
         return resp
     def disconnect(self):
         try:
@@ -452,7 +458,6 @@ class SimpleFTP:
         while True:
             try:
                 chunk = self.sock.recv(512)
-#                blitz_backlight(ms=100)
                 if not chunk:
                     break
                 resp += chunk
@@ -463,6 +468,7 @@ class SimpleFTP:
 
     def connect(self):
         try:
+            blitz_backlight(ms=1000)
             self.sock = usocket.socket()
             self.sock.settimeout(10)  # ← neu
             addr = usocket.getaddrinfo(self.host, self.port)[0][-1]
@@ -477,6 +483,7 @@ class SimpleFTP:
             #logger.log('FTP: connect exception',e)
     def _pasv(self):
         try:
+            blitz_backlight(ms=1000)
             resp = self._send("PASV")
             #logger.log("FTP: PASV Roh-Antwort vom Server:" , str(resp))
 
@@ -526,7 +533,7 @@ class SimpleFTP:
        chunk_size = 512
        total_chunks = (file_size + chunk_size - 1) // chunk_size
        blink(color='green', count=3, on_ms=100, off_ms=100)
-       blitz_backlight()
+       blitz_backlight(ms=1000)
        gc.collect()
        #logger.log(f"FTP: uploading {file_size} bytes in {total_chunks} chunks")
     
@@ -547,12 +554,12 @@ class SimpleFTP:
                gc.collect()
                chunk_index += 1
                if chunk_index % 20 == 0:
-                   blitz_backlight()
+                   blitz_backlight(ms=1000)
                bytes_sent += len(chunk)
     
                if bytes_sent - last_logged_bytes >= log_interval:
                    #logger.log(f"FTP: chunk {chunk_index} of {total_chunks}")
-                   blitz_backlight()
+                   blitz_backlight(ms=1000)
                    last_logged_bytes = bytes_sent
     
        logger.log(f"FTP: uploaded all {total_chunks} chunks")
@@ -635,7 +642,7 @@ def upload_and_clear(reason, localfile=LOCAL_FILE):
         #print('del ftp OK')
         blink()
         gc.collect()
-        blitz_backlight()
+        blitz_backlight(ms=1000)
         gc.collect()
     except Exception as e:
         logger.log("    FTP-Fehler während der Übertragung:", e)
@@ -658,7 +665,7 @@ def upload_and_clear(reason, localfile=LOCAL_FILE):
     else:
          blink(color='red')
          gc.collect()
-         blitz_backlight()
+         blitz_backlight(ms=1000)
          gc.collect()
          blink(color='red')
          gc.collect()
@@ -666,22 +673,20 @@ def upload_and_clear(reason, localfile=LOCAL_FILE):
     # Nach dem FTP-Lauf sofort wieder saubermachen für die nächsten Messungen
     gc.collect()
     return success
-def blitz_backlight(ms=1000):
-    """Display-Backlight für ms Millisekunden voll einschalten.
-    Hinweis: Überschreibt ggf. eine vorhandene PWM-Steuerung auf GPIO21."""
-    _bl.value(1)
-    time.sleep_ms(ms)
-    _bl.value(0)
 def run():
+    blitz_backlight(ms=1000)
     from manual_upload import manual_transfer
     print('ftp transfer')
+    blitz_backlight(ms=1000)
     manual_transfer()
+    blitz_backlight(ms=1000)
     print('ftp transfer done')
     # Herausfinden, wer gestartet hat, via Namensraum
     gc.collect()
     print('gc.mem_free()',gc.mem_free())
     caller = "direkt/main" if __name__ == "__main__" else "programm_starten"
     #logger.log('ftptrans caller:', caller)
+    blitz_backlight(ms=1000)
     global _display, led
     led = LED()
    
@@ -691,17 +696,17 @@ def run():
         Pin(13, Pin.IN)
     except Exception:
         pass
-    
+    blitz_backlight(ms=1000)
     # Echte Hardware initialisieren
     _spi = SPI(1, baudrate=40000000, sck=Pin(14), mosi=Pin(13))
     _display = Display(_spi, dc=Pin(2), cs=Pin(15), rst=Pin(15),
                        width=320, height=240, rotation=0)
-    Pin(21, Pin.OUT).on()
-    
+#     Pin(21, Pin.OUT).on()
+    blitz_backlight(ms=1000)
     import utime
     utime.sleep(2)  # Socket-Cleanup abwarten
     NTP_SERVERS = ["fritz.box", "192.168.178.1", "192.168.178.11",'192.168.178.31','192.168.178.88']  # deine IPs
-
+    blitz_backlight(ms=1000)
     ntp_ok = False
     for i in range(3):
         for host in NTP_SERVERS:
@@ -715,6 +720,7 @@ def run():
                 print('ntptime.settime() success, host=' , host)
                 ntp_ok = True
                 blink()
+                blitz_backlight(ms=1000)
                 gc.collect()
                 break
             except Exception as e:
@@ -734,7 +740,7 @@ def run():
     t = time.localtime()
     last_day = t[2]
     _display.draw_text8x8(10, 60, "init OK   ", GREEN, BLACK)
-    
+    blitz_backlight(ms=1000)
     # Zugriff auf wlan-Objekt abfangen (falls es global in main.py existiert)
     # Wenn nicht verfügbar, erstellen wir ein Dummy-Objekt, um Abstürze zu verhindern
     # Echte WLAN-Schnittstelle direkt vom System holen (unabhängig von Namensräumen)
@@ -744,6 +750,7 @@ def run():
         print('not wlan')
         import machine
         machine.soft_reset()
+    blitz_backlight(ms=1000)    
     #logger.log('before switching off display wlan.isconnected()', str(wlan.isconnected()))
     gc.collect()
 #     print('free memory:', gc.mem_free())
@@ -757,7 +764,9 @@ def run():
     
     # Jetzt auf DummyDisplay umschalten
 #     print('_display = turn_off_and_get_dummy(_display, _spi)')
+    blitz_backlight(ms=1000)
     _display = turn_off_and_get_dummy(_display, _spi)
+    blitz_backlight(ms=1000)
     gc.collect()
     
     i = 0
@@ -778,13 +787,13 @@ def run():
         gc.collect()
         today = t[2]
         try:
+            blitz_backlight(ms=1000)
             row = append_row(i)
             gc.collect()
             i += 1
             time.sleep(2)
             blink()
             gc.collect()
-            blitz_backlight()
             gc.collect()
         except OSError as e:
             try:
